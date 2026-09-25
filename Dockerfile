@@ -6,9 +6,9 @@ WORKDIR /app
 # Install openssl and libc6-compat for Prisma engine on Alpine
 RUN apk add --no-cache openssl libc6-compat
 
-# Install dependencies
+# Install dependencies (include devDependencies for building TypeScript/NestJS)
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --include=dev
 
 # Copy Prisma schema and generate client
 COPY src/prisma ./src/prisma
