@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Param,
   Body,
   Query,
@@ -22,6 +23,9 @@ import { CreateWorkoutSessionDto } from './dto/create-workout-session.dto';
 import { CompleteWorkoutSessionDto } from './dto/complete-workout-session.dto';
 import { WorkoutSessionFilterDto } from './dto/workout-session-filter.dto';
 import { WorkoutSessionResponseDto } from './dto/workout-session-response.dto';
+import { CreateSetLogDto } from './dto/create-set-log.dto';
+import { SetLogResponseDto } from './dto/set-log-response.dto';
+import { ExerciseProgressResponseDto } from './dto/exercise-progress-response.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
@@ -57,11 +61,122 @@ export class WorkoutSessionsController {
     return this.workoutSessionsService.startSession(userId, createDto);
   }
 
+  // ============================================================================
+  // PROGRESS ROUTES (Defined before :id routes to prevent route conflict)
+  // ============================================================================
+
+  @Get('user/progress')
+  @ApiOperation({
+    summary: 'Get all exercise progress states for the authenticated user',
+    description:
+      'Returns progressive overload status, working weights, and suggestions for all exercises practiced',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'List of exercise progress states',
+    type: [ExerciseProgressResponseDto],
+  })
+  async getUserProgress(
+    @CurrentUser('userId') userId: string,
+  ): Promise<ExerciseProgressResponseDto[]> {
+    return this.workoutSessionsService.getUserAllProgress(userId);
+  }
+
+  @Get('exercises/:exerciseId/progress')
+  @ApiOperation({
+    summary: 'Get progressive overload status and suggested next weight for an exercise',
+    description:
+      'Returns current working weight, consecutive sessions at target, and suggested increment if mastered',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Exercise progress status and weight suggestions',
+    type: ExerciseProgressResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Exercise not found',
+  })
+  async getExerciseProgress(
+    @CurrentUser('userId') userId: string,
+    @Param('exerciseId', ParseUUIDPipe) exerciseId: string,
+  ): Promise<ExerciseProgressResponseDto> {
+    return this.workoutSessionsService.getExerciseProgress(userId, exerciseId);
+  }
+
+  // ============================================================================
+  // SESSION SETS ROUTES
+  // ============================================================================
+
+  @Post(':id/sets')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Log a completed set during an active workout session',
+    description:
+      'Records set number, weight, reps, warmup flag, and optional RPE for an exercise',
+  })
+  @ApiResponse({
+    status: HttpStatus.CREATED,
+    description: 'Set logged successfully',
+    type: SetLogResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Session or Exercise not found',
+  })
+  @ApiResponse({
+    status: HttpStatus.CONFLICT,
+    description: 'Session is not IN_PROGRESS',
+  })
+  async addSetLog(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') userId: string,
+    @Body() dto: CreateSetLogDto,
+  ): Promise<SetLogResponseDto> {
+    return this.workoutSessionsService.addSetLog(id, userId, dto);
+  }
+
+  @Get(':id/sets')
+  @ApiOperation({
+    summary: 'Get all sets logged for a workout session',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'List of sets recorded in the session',
+    type: [SetLogResponseDto],
+  })
+  async getSessionSets(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') userId: string,
+  ): Promise<SetLogResponseDto[]> {
+    return this.workoutSessionsService.getSessionSets(id, userId);
+  }
+
+  @Delete(':id/sets/:setId')
+  @ApiOperation({
+    summary: 'Delete a set log from an in-progress workout session',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Set log deleted successfully',
+  })
+  async deleteSetLog(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('setId', ParseUUIDPipe) setId: string,
+    @CurrentUser('userId') userId: string,
+  ): Promise<{ message: string }> {
+    return this.workoutSessionsService.deleteSetLog(id, setId, userId);
+  }
+
+  // ============================================================================
+  // SESSION ACTIONS & LOOKUP
+  // ============================================================================
+
   @Patch(':id/complete')
   @ApiOperation({
     summary: 'Complete an in-progress workout session',
     description:
-      'Records duration, calories, and average heart rate. Rejects with 409 if not IN_PROGRESS.',
+      'Records duration, calories, heart rate, updates plan day, and evaluates progressive overload for logged sets.',
   })
   @ApiResponse({
     status: HttpStatus.OK,

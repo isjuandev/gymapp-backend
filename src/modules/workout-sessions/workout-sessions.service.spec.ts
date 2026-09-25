@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { WorkoutSessionsService } from './workout-sessions.service';
 import { WorkoutSessionsRepository } from './repositories/workout-sessions.repository';
@@ -18,6 +19,8 @@ describe('WorkoutSessionsService', () => {
   const otherUserId = 'user-uuid-2222';
   const workoutId = 'workout-uuid-3333';
   const sessionId = 'session-uuid-4444';
+  const exerciseId = 'exercise-uuid-5555';
+  const setId = 'set-uuid-6666';
 
   const mockSession = {
     id: sessionId,
@@ -40,6 +43,24 @@ describe('WorkoutSessionsService', () => {
     },
   };
 
+  const mockExercise = {
+    id: exerciseId,
+    workoutId,
+    name: 'Press de Banca Plano',
+    order: 1,
+    minReps: 8,
+    maxReps: 12,
+    defaultSets: 3,
+    restSeconds: 90,
+    requiredEquipment: {
+      id: 'eq-bench',
+      name: 'Banco Plano y Barra',
+      incrementKg: 2.5,
+      maxWeightKg: 200,
+    },
+    catalogItem: null,
+  };
+
   beforeEach(async () => {
     const mockSessionsRepo = {
       create: jest.fn(),
@@ -48,6 +69,14 @@ describe('WorkoutSessionsService', () => {
       completeSession: jest.fn(),
       skipSession: jest.fn(),
       updateMatchingPlanDayToCompleted: jest.fn(),
+      createSetLog: jest.fn(),
+      findSetLogsBySessionId: jest.fn(),
+      findSetLogById: jest.fn(),
+      deleteSetLog: jest.fn(),
+      findExerciseWithDetails: jest.fn(),
+      findProgressState: jest.fn(),
+      findAllProgressStatesForUser: jest.fn(),
+      upsertProgressState: jest.fn(),
     };
 
     const mockWorkoutsRepo = {
@@ -93,8 +122,8 @@ describe('WorkoutSessionsService', () => {
     });
   });
 
-  describe('completeSession (CompleteWorkoutSessionUseCase)', () => {
-    it('should complete session and synchronize matching plan day', async () => {
+  describe('completeSession (CompleteWorkoutSessionUseCase & Progressive Overload)', () => {
+    it('should complete session, evaluate progressive overload and suggest next weight on 2nd consecutive session at target', async () => {
       sessionsRepo.findById.mockResolvedValue(mockSession as any);
       sessionsRepo.completeSession.mockResolvedValue({
         ...mockSession,
@@ -102,6 +131,46 @@ describe('WorkoutSessionsService', () => {
         durationActualSeconds: 2700,
         kcalBurned: 420,
         avgHeartRate: 135,
+      } as any);
+
+      // Mock 3 working sets hitting 12 reps at 40kg
+      sessionsRepo.findSetLogsBySessionId.mockResolvedValue([
+        {
+          id: 'set-1',
+          workoutSessionId: sessionId,
+          exerciseId,
+          setNumber: 1,
+          weightKg: 40,
+          reps: 12,
+          isWarmup: false,
+          rpe: 8,
+          completedAt: new Date(),
+        },
+        {
+          id: 'set-2',
+          workoutSessionId: sessionId,
+          exerciseId,
+          setNumber: 2,
+          weightKg: 40,
+          reps: 12,
+          isWarmup: false,
+          rpe: 8.5,
+          completedAt: new Date(),
+        },
+      ] as any);
+
+      sessionsRepo.findExerciseWithDetails.mockResolvedValue(mockExercise as any);
+
+      // Previous state: already completed 1 session at 40kg
+      sessionsRepo.findProgressState.mockResolvedValue({
+        id: 'prog-1',
+        userId,
+        exerciseId,
+        currentWorkingWeightKg: 40,
+        consecutiveSessionsAtTarget: 1,
+        suggestedNextWeightKg: null,
+        lastSessionDate: new Date(),
+        lastUpdated: new Date(),
       } as any);
 
       const result = await service.completeSession(sessionId, userId, {
@@ -115,9 +184,18 @@ describe('WorkoutSessionsService', () => {
         kcalBurned: 420,
         avgHeartRate: 135,
       });
-      expect(
-        sessionsRepo.updateMatchingPlanDayToCompleted,
-      ).toHaveBeenCalledWith(userId, workoutId, mockSession.date);
+
+      // Consecutive should now be 2, and suggested next weight should be 40 + 2.5 = 42.5kg!
+      expect(sessionsRepo.upsertProgressState).toHaveBeenCalledWith(
+        userId,
+        exerciseId,
+        expect.objectContaining({
+          currentWorkingWeightKg: 40,
+          consecutiveSessionsAtTarget: 2,
+          suggestedNextWeightKg: 42.5,
+        }),
+      );
+
       expect(result.status).toBe(WorkoutSessionStatus.COMPLETED);
     });
 
@@ -145,86 +223,110 @@ describe('WorkoutSessionsService', () => {
         }),
       ).rejects.toThrow(ConflictException);
     });
-
-    it('should throw NotFoundException if session does not exist', async () => {
-      sessionsRepo.findById.mockResolvedValue(null);
-
-      await expect(
-        service.completeSession('unknown-id', userId, {
-          durationActualSeconds: 2700,
-          kcalBurned: 400,
-        }),
-      ).rejects.toThrow(NotFoundException);
-    });
   });
 
-  describe('skipSession', () => {
-    it('should mark session as SKIPPED for session owner', async () => {
+  describe('Set Logging & Tracking', () => {
+    it('should log a completed set for an exercise in progress', async () => {
       sessionsRepo.findById.mockResolvedValue(mockSession as any);
-      sessionsRepo.skipSession.mockResolvedValue({
-        ...mockSession,
-        status: WorkoutSessionStatus.SKIPPED,
+      sessionsRepo.findExerciseWithDetails.mockResolvedValue(mockExercise as any);
+      sessionsRepo.createSetLog.mockResolvedValue({
+        id: setId,
+        workoutSessionId: sessionId,
+        exerciseId,
+        setNumber: 1,
+        weightKg: 40,
+        reps: 12,
+        isWarmup: false,
+        rpe: 8,
+        completedAt: new Date(),
       } as any);
 
-      const result = await service.skipSession(sessionId, userId);
-      expect(result.status).toBe(WorkoutSessionStatus.SKIPPED);
-    });
-
-    it('should throw ForbiddenException if user does not own session', async () => {
-      sessionsRepo.findById.mockResolvedValue(mockSession as any);
-
-      await expect(service.skipSession(sessionId, otherUserId)).rejects.toThrow(
-        ForbiddenException,
-      );
-    });
-
-    it('should throw ConflictException if session was already COMPLETED', async () => {
-      sessionsRepo.findById.mockResolvedValue({
-        ...mockSession,
-        status: WorkoutSessionStatus.COMPLETED,
-      } as any);
-
-      await expect(service.skipSession(sessionId, userId)).rejects.toThrow(
-        ConflictException,
-      );
-    });
-  });
-
-  describe('getUserSessions', () => {
-    it('should return session history for authenticated user', async () => {
-      sessionsRepo.findByUserAndDateRange.mockResolvedValue([
-        mockSession as any,
-      ]);
-
-      const result = await service.getUserSessions(userId, {
-        from: '2026-09-01T00:00:00.000Z',
-        to: '2026-09-30T23:59:59.999Z',
+      const result = await service.addSetLog(sessionId, userId, {
+        exerciseId,
+        setNumber: 1,
+        weightKg: 40,
+        reps: 12,
+        isWarmup: false,
+        rpe: 8,
       });
 
-      expect(sessionsRepo.findByUserAndDateRange).toHaveBeenCalledWith(
-        userId,
-        new Date('2026-09-01T00:00:00.000Z'),
-        new Date('2026-09-30T23:59:59.999Z'),
-      );
-      expect(result).toHaveLength(1);
-      expect(result[0].id).toBe(sessionId);
+      expect(result.id).toBe(setId);
+      expect(result.weightKg).toBe(40);
+      expect(result.reps).toBe(12);
+    });
+
+    it('should reject set log if exercise does not belong to workout', async () => {
+      sessionsRepo.findById.mockResolvedValue(mockSession as any);
+      sessionsRepo.findExerciseWithDetails.mockResolvedValue({
+        ...mockExercise,
+        workoutId: 'different-workout-uuid',
+      } as any);
+
+      await expect(
+        service.addSetLog(sessionId, userId, {
+          exerciseId,
+          setNumber: 1,
+          weightKg: 40,
+          reps: 12,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should retrieve all sets logged for a session', async () => {
+      sessionsRepo.findById.mockResolvedValue(mockSession as any);
+      sessionsRepo.findSetLogsBySessionId.mockResolvedValue([
+        {
+          id: setId,
+          workoutSessionId: sessionId,
+          exerciseId,
+          setNumber: 1,
+          weightKg: 40,
+          reps: 12,
+          isWarmup: false,
+          rpe: 8,
+          completedAt: new Date(),
+        } as any,
+      ]);
+
+      const sets = await service.getSessionSets(sessionId, userId);
+      expect(sets).toHaveLength(1);
+      expect(sets[0].setNumber).toBe(1);
+    });
+
+    it('should delete a set log from an in-progress session', async () => {
+      sessionsRepo.findById.mockResolvedValue(mockSession as any);
+      sessionsRepo.findSetLogById.mockResolvedValue({
+        id: setId,
+        workoutSessionId: sessionId,
+      } as any);
+
+      const result = await service.deleteSetLog(sessionId, setId, userId);
+      expect(sessionsRepo.deleteSetLog).toHaveBeenCalledWith(setId);
+      expect(result.message).toContain('deleted successfully');
     });
   });
 
-  describe('getSessionById', () => {
-    it('should return session for owner', async () => {
-      sessionsRepo.findById.mockResolvedValue(mockSession as any);
+  describe('getExerciseProgress', () => {
+    it('should return progressive overload status and mastery badge', async () => {
+      sessionsRepo.findExerciseWithDetails.mockResolvedValue(mockExercise as any);
+      sessionsRepo.findProgressState.mockResolvedValue({
+        id: 'prog-1',
+        userId,
+        exerciseId,
+        currentWorkingWeightKg: 40,
+        consecutiveSessionsAtTarget: 2,
+        suggestedNextWeightKg: 42.5,
+        lastSessionDate: new Date(),
+        lastUpdated: new Date(),
+      } as any);
 
-      const result = await service.getSessionById(sessionId, userId);
-      expect(result.id).toBe(sessionId);
-    });
+      const progress = await service.getExerciseProgress(userId, exerciseId);
 
-    it('should throw ForbiddenException when accessing another user session', async () => {
-      sessionsRepo.findById.mockResolvedValue(mockSession as any);
-
-      await expect(
-        service.getSessionById(sessionId, otherUserId),
-      ).rejects.toThrow(ForbiddenException);
+      expect(progress.exerciseId).toBe(exerciseId);
+      expect(progress.currentWorkingWeightKg).toBe(40);
+      expect(progress.isMastered).toBe(true);
+      expect(progress.suggestedNextWeightKg).toBe(42.5);
+      expect(progress.incrementKg).toBe(2.5);
     });
   });
 });

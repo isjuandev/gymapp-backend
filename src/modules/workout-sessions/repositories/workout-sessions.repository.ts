@@ -1,17 +1,28 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import {
+  Equipment,
+  Exercise,
+  ExerciseCatalog,
+  ExerciseProgressState,
+  ExerciseSetLog,
   PlanDayStatus,
   Workout,
   WorkoutSession,
   WorkoutSessionStatus,
 } from '@prisma/client';
+import { CreateSetLogDto } from '../dto/create-set-log.dto';
 
 export interface CompleteSessionData {
   durationActualSeconds: number;
   kcalBurned: number;
   avgHeartRate?: number;
 }
+
+export type ExerciseWithEquipmentDetails = Exercise & {
+  requiredEquipment: Equipment | null;
+  catalogItem: (ExerciseCatalog & { equipment: Equipment | null }) | null;
+};
 
 @Injectable()
 export class WorkoutSessionsRepository {
@@ -135,5 +146,132 @@ export class WorkoutSessionsRepository {
         },
       });
     }
+  }
+
+  // ============================================================================
+  // SET LOGS METHODS
+  // ============================================================================
+
+  async createSetLog(
+    sessionId: string,
+    dto: CreateSetLogDto,
+  ): Promise<ExerciseSetLog> {
+    return this.prisma.exerciseSetLog.create({
+      data: {
+        workoutSessionId: sessionId,
+        exerciseId: dto.exerciseId,
+        setNumber: dto.setNumber,
+        weightKg: dto.weightKg,
+        reps: dto.reps,
+        isWarmup: dto.isWarmup ?? false,
+        rpe: dto.rpe ?? null,
+      },
+    });
+  }
+
+  async findSetLogsBySessionId(sessionId: string): Promise<ExerciseSetLog[]> {
+    return this.prisma.exerciseSetLog.findMany({
+      where: { workoutSessionId: sessionId },
+      orderBy: [{ exerciseId: 'asc' }, { setNumber: 'asc' }],
+    });
+  }
+
+  async findSetLogById(setId: string): Promise<ExerciseSetLog | null> {
+    return this.prisma.exerciseSetLog.findUnique({
+      where: { id: setId },
+    });
+  }
+
+  async deleteSetLog(setId: string): Promise<ExerciseSetLog> {
+    return this.prisma.exerciseSetLog.delete({
+      where: { id: setId },
+    });
+  }
+
+  // ============================================================================
+  // EXERCISE & PROGRESS METHODS
+  // ============================================================================
+
+  async findExerciseWithDetails(
+    exerciseId: string,
+  ): Promise<ExerciseWithEquipmentDetails | null> {
+    return this.prisma.exercise.findUnique({
+      where: { id: exerciseId },
+      include: {
+        requiredEquipment: true,
+        catalogItem: {
+          include: {
+            equipment: true,
+          },
+        },
+      },
+    });
+  }
+
+  async findProgressState(
+    userId: string,
+    exerciseId: string,
+  ): Promise<ExerciseProgressState | null> {
+    return this.prisma.exerciseProgressState.findUnique({
+      where: {
+        userId_exerciseId: {
+          userId,
+          exerciseId,
+        },
+      },
+    });
+  }
+
+  async findAllProgressStatesForUser(userId: string) {
+    return this.prisma.exerciseProgressState.findMany({
+      where: { userId },
+      include: {
+        exercise: {
+          include: {
+            requiredEquipment: true,
+            catalogItem: {
+              include: {
+                equipment: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: { lastUpdated: 'desc' },
+    });
+  }
+
+  async upsertProgressState(
+    userId: string,
+    exerciseId: string,
+    data: {
+      currentWorkingWeightKg: number;
+      consecutiveSessionsAtTarget: number;
+      suggestedNextWeightKg: number | null;
+      lastSessionDate: Date;
+    },
+  ): Promise<ExerciseProgressState> {
+    return this.prisma.exerciseProgressState.upsert({
+      where: {
+        userId_exerciseId: {
+          userId,
+          exerciseId,
+        },
+      },
+      create: {
+        userId,
+        exerciseId,
+        currentWorkingWeightKg: data.currentWorkingWeightKg,
+        consecutiveSessionsAtTarget: data.consecutiveSessionsAtTarget,
+        suggestedNextWeightKg: data.suggestedNextWeightKg,
+        lastSessionDate: data.lastSessionDate,
+      },
+      update: {
+        currentWorkingWeightKg: data.currentWorkingWeightKg,
+        consecutiveSessionsAtTarget: data.consecutiveSessionsAtTarget,
+        suggestedNextWeightKg: data.suggestedNextWeightKg,
+        lastSessionDate: data.lastSessionDate,
+      },
+    });
   }
 }

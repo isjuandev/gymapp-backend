@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { WorkoutSessionsRepository } from './repositories/workout-sessions.repository';
 import { WorkoutsRepository } from '../workouts/repositories/workouts.repository';
@@ -10,6 +11,9 @@ import { CreateWorkoutSessionDto } from './dto/create-workout-session.dto';
 import { CompleteWorkoutSessionDto } from './dto/complete-workout-session.dto';
 import { WorkoutSessionFilterDto } from './dto/workout-session-filter.dto';
 import { WorkoutSessionResponseDto } from './dto/workout-session-response.dto';
+import { CreateSetLogDto } from './dto/create-set-log.dto';
+import { SetLogResponseDto } from './dto/set-log-response.dto';
+import { ExerciseProgressResponseDto } from './dto/exercise-progress-response.dto';
 import { WorkoutSessionStatus } from '@prisma/client';
 
 @Injectable()
@@ -44,7 +48,7 @@ export class WorkoutSessionsService {
 
   /**
    * CompleteWorkoutSessionUseCase: Validates ownership and IN_PROGRESS state, records metrics,
-   * updates status to COMPLETED, and synchronizes matching daily plan if active.
+   * updates status to COMPLETED, evaluates progressive overload for completed sets, and synchronizes matching daily plan if active.
    */
   async completeSession(
     id: string,
@@ -73,14 +77,15 @@ export class WorkoutSessionsService {
     const completedSession =
       await this.workoutSessionsRepository.completeSession(id, dto);
 
+    // Progressive Overload Engine: Evaluate Double Progression for all logged sets in this session
+    await this.evaluateProgressiveOverload(id, userId);
+
     // If an associated PlanDay exists for this workout on this date, complete it
     await this.workoutSessionsRepository.updateMatchingPlanDayToCompleted(
       userId,
       session.workoutId,
       session.date,
     );
-
-    //TODO: al completar una sesion, si el modulo Feed existe (Prompt 10), disparar la creacion de un Post de logro
 
     return WorkoutSessionResponseDto.fromEntity(completedSession);
   }
@@ -152,5 +157,318 @@ export class WorkoutSessionsService {
     }
 
     return WorkoutSessionResponseDto.fromEntity(session);
+  }
+
+  // ============================================================================
+  // SET LOGS METHODS
+  // ============================================================================
+
+  /**
+   * Record a completed set during an active (IN_PROGRESS) workout session.
+   */
+  async addSetLog(
+    sessionId: string,
+    userId: string,
+    dto: CreateSetLogDto,
+  ): Promise<SetLogResponseDto> {
+    const session = await this.workoutSessionsRepository.findById(sessionId);
+    if (!session) {
+      throw new NotFoundException(
+        `Workout session with ID '${sessionId}' not found`,
+      );
+    }
+
+    if (session.userId !== userId) {
+      throw new ForbiddenException(
+        'You do not have permission to modify this workout session',
+      );
+    }
+
+    if (session.status !== WorkoutSessionStatus.IN_PROGRESS) {
+      throw new ConflictException(
+        `Cannot log sets: session status is '${session.status}', must be IN_PROGRESS`,
+      );
+    }
+
+    // Verify exercise exists
+    const exercise = await this.workoutSessionsRepository.findExerciseWithDetails(
+      dto.exerciseId,
+    );
+    if (!exercise) {
+      throw new NotFoundException(
+        `Exercise with ID '${dto.exerciseId}' not found`,
+      );
+    }
+
+    // Verify exercise belongs to the workout being executed
+    if (exercise.workoutId !== session.workoutId) {
+      throw new BadRequestException(
+        `Exercise '${exercise.name}' does not belong to the active workout session`,
+      );
+    }
+
+    const setLog = await this.workoutSessionsRepository.createSetLog(
+      sessionId,
+      dto,
+    );
+    return SetLogResponseDto.fromEntity(setLog);
+  }
+
+  /**
+   * Get all set logs recorded in a session.
+   */
+  async getSessionSets(
+    sessionId: string,
+    userId: string,
+  ): Promise<SetLogResponseDto[]> {
+    const session = await this.workoutSessionsRepository.findById(sessionId);
+    if (!session) {
+      throw new NotFoundException(
+        `Workout session with ID '${sessionId}' not found`,
+      );
+    }
+
+    if (session.userId !== userId) {
+      throw new ForbiddenException(
+        'You do not have permission to access this workout session',
+      );
+    }
+
+    const logs =
+      await this.workoutSessionsRepository.findSetLogsBySessionId(sessionId);
+    return logs.map((l) => SetLogResponseDto.fromEntity(l));
+  }
+
+  /**
+   * Delete a previously recorded set log in an active session.
+   */
+  async deleteSetLog(
+    sessionId: string,
+    setId: string,
+    userId: string,
+  ): Promise<{ message: string }> {
+    const session = await this.workoutSessionsRepository.findById(sessionId);
+    if (!session) {
+      throw new NotFoundException(
+        `Workout session with ID '${sessionId}' not found`,
+      );
+    }
+
+    if (session.userId !== userId) {
+      throw new ForbiddenException(
+        'You do not have permission to modify this workout session',
+      );
+    }
+
+    if (session.status !== WorkoutSessionStatus.IN_PROGRESS) {
+      throw new ConflictException(
+        `Cannot delete set: session status is '${session.status}', must be IN_PROGRESS`,
+      );
+    }
+
+    const setLog = await this.workoutSessionsRepository.findSetLogById(setId);
+    if (!setLog || setLog.workoutSessionId !== sessionId) {
+      throw new NotFoundException(
+        `Set log with ID '${setId}' not found in this session`,
+      );
+    }
+
+    await this.workoutSessionsRepository.deleteSetLog(setId);
+    return { message: 'Set log deleted successfully' };
+  }
+
+  // ============================================================================
+  // PROGRESSIVE OVERLOAD ENGINE
+  // ============================================================================
+
+  /**
+   * Evaluates Double Progression for all working sets logged in a completed session:
+   * 1. Groups working sets (non-warmup) by exerciseId.
+   * 2. If all sets hit >= maxReps at the same working weight:
+   *    - If previous session also hit target at this weight: consecutive = previous + 1.
+   *    - If consecutive >= 2: weight is MASTERED -> calculates suggestedNextWeightKg = weight + incrementKg.
+   *    - Else: consecutive = 1, suggestedNextWeightKg = null.
+   * 3. Else: resets consecutive = 0, suggestedNextWeightKg = null.
+   */
+  private async evaluateProgressiveOverload(
+    sessionId: string,
+    userId: string,
+  ): Promise<void> {
+    const logs =
+      await this.workoutSessionsRepository.findSetLogsBySessionId(sessionId);
+    const workingLogs = logs.filter((log) => !log.isWarmup);
+    if (workingLogs.length === 0) return;
+
+    // Group logs by exerciseId
+    const logsByExercise = new Map<string, typeof workingLogs>();
+    for (const log of workingLogs) {
+      const existing = logsByExercise.get(log.exerciseId) || [];
+      existing.push(log);
+      logsByExercise.set(log.exerciseId, existing);
+    }
+
+    for (const [exerciseId, exerciseSets] of logsByExercise.entries()) {
+      const exercise =
+        await this.workoutSessionsRepository.findExerciseWithDetails(exerciseId);
+      if (!exercise) continue;
+
+      const equipment =
+        exercise.requiredEquipment ?? exercise.catalogItem?.equipment;
+      const incrementKg = equipment?.incrementKg
+        ? Number(equipment.incrementKg)
+        : 2.5;
+      const maxWeightKg = equipment?.maxWeightKg
+        ? Number(equipment.maxWeightKg)
+        : null;
+      const targetReps = exercise.maxReps || 12;
+
+      // Check if all working sets hit the top of the rep range
+      const allHitTarget =
+        exerciseSets.length >= 1 &&
+        exerciseSets.every((s) => s.reps >= targetReps);
+
+      // Representative working weight
+      const sessionWorkingWeight = Math.min(
+        ...exerciseSets.map((s) => Number(s.weightKg)),
+      );
+
+      const existingProgress =
+        await this.workoutSessionsRepository.findProgressState(
+          userId,
+          exerciseId,
+        );
+
+      if (allHitTarget) {
+        let consecutive = 1;
+        if (
+          existingProgress &&
+          Number(existingProgress.currentWorkingWeightKg) ===
+            sessionWorkingWeight
+        ) {
+          consecutive = existingProgress.consecutiveSessionsAtTarget + 1;
+        }
+
+        let suggestedNextWeight: number | null = null;
+        if (consecutive >= 2) {
+          suggestedNextWeight = sessionWorkingWeight + incrementKg;
+          if (maxWeightKg !== null && suggestedNextWeight > maxWeightKg) {
+            suggestedNextWeight = maxWeightKg;
+          }
+        }
+
+        await this.workoutSessionsRepository.upsertProgressState(
+          userId,
+          exerciseId,
+          {
+            currentWorkingWeightKg: sessionWorkingWeight,
+            consecutiveSessionsAtTarget: consecutive,
+            suggestedNextWeightKg: suggestedNextWeight,
+            lastSessionDate: new Date(),
+          },
+        );
+      } else {
+        const highestWeight = Math.max(
+          ...exerciseSets.map((s) => Number(s.weightKg)),
+        );
+        await this.workoutSessionsRepository.upsertProgressState(
+          userId,
+          exerciseId,
+          {
+            currentWorkingWeightKg: highestWeight,
+            consecutiveSessionsAtTarget: 0,
+            suggestedNextWeightKg: null,
+            lastSessionDate: new Date(),
+          },
+        );
+      }
+    }
+  }
+
+  /**
+   * Get progress state & suggested next weight for an exercise for the authenticated user.
+   */
+  async getExerciseProgress(
+    userId: string,
+    exerciseId: string,
+  ): Promise<ExerciseProgressResponseDto> {
+    const exercise =
+      await this.workoutSessionsRepository.findExerciseWithDetails(exerciseId);
+    if (!exercise) {
+      throw new NotFoundException(
+        `Exercise with ID '${exerciseId}' not found`,
+      );
+    }
+
+    const equipment =
+      exercise.requiredEquipment ?? exercise.catalogItem?.equipment;
+    const incrementKg = equipment?.incrementKg
+      ? Number(equipment.incrementKg)
+      : 2.5;
+
+    const progress = await this.workoutSessionsRepository.findProgressState(
+      userId,
+      exerciseId,
+    );
+
+    const consecutive = progress?.consecutiveSessionsAtTarget ?? 0;
+    const currentWeight = progress
+      ? Number(progress.currentWorkingWeightKg)
+      : 0;
+    const suggestedWeight =
+      progress?.suggestedNextWeightKg !== null &&
+      progress?.suggestedNextWeightKg !== undefined
+        ? Number(progress.suggestedNextWeightKg)
+        : null;
+
+    return {
+      exerciseId: exercise.id,
+      exerciseName: exercise.name,
+      currentWorkingWeightKg: currentWeight,
+      consecutiveSessionsAtTarget: consecutive,
+      isMastered: consecutive >= 2,
+      suggestedNextWeightKg: suggestedWeight,
+      targetMinReps: exercise.minReps,
+      targetMaxReps: exercise.maxReps,
+      incrementKg,
+      equipmentName: equipment?.name ?? null,
+      lastSessionDate: progress?.lastSessionDate ?? null,
+    };
+  }
+
+  /**
+   * Get all exercise progress states for the authenticated user.
+   */
+  async getUserAllProgress(
+    userId: string,
+  ): Promise<ExerciseProgressResponseDto[]> {
+    const states =
+      await this.workoutSessionsRepository.findAllProgressStatesForUser(userId);
+
+    return states.map((state) => {
+      const exercise = state.exercise;
+      const equipment =
+        exercise.requiredEquipment ?? exercise.catalogItem?.equipment;
+      const incrementKg = equipment?.incrementKg
+        ? Number(equipment.incrementKg)
+        : 2.5;
+      const consecutive = state.consecutiveSessionsAtTarget;
+
+      return {
+        exerciseId: exercise.id,
+        exerciseName: exercise.name,
+        currentWorkingWeightKg: Number(state.currentWorkingWeightKg),
+        consecutiveSessionsAtTarget: consecutive,
+        isMastered: consecutive >= 2,
+        suggestedNextWeightKg:
+          state.suggestedNextWeightKg !== null
+            ? Number(state.suggestedNextWeightKg)
+            : null,
+        targetMinReps: exercise.minReps,
+        targetMaxReps: exercise.maxReps,
+        incrementKg,
+        equipmentName: equipment?.name ?? null,
+        lastSessionDate: state.lastSessionDate,
+      };
+    });
   }
 }
