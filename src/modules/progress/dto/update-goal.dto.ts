@@ -1,12 +1,24 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
+  IsEnum,
   IsNumber,
   IsOptional,
   IsPositive,
 } from 'class-validator';
+import { GoalType } from '@prisma/client';
 
 export class UpdateGoalDto {
+  @ApiPropertyOptional({
+    enum: GoalType,
+    example: GoalType.LOSE_WEIGHT,
+    description: 'Updated goal type',
+  })
+  @IsOptional()
+  @IsEnum(GoalType, {
+    message: 'type must be one of: LOSE_WEIGHT, GAIN_MUSCLE, IMPROVE_HEALTH',
+  })
+  type?: GoalType;
   @ApiPropertyOptional({
     example: 75.0,
     description: 'Updated current progress metric value',

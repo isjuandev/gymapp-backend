@@ -15,6 +15,7 @@ export interface CreateGoalData {
 }
 
 export interface UpdateGoalData {
+  type?: GoalType;
   targetValue?: number;
   currentValue?: number;
   deadline?: Date | null;
@@ -162,6 +163,7 @@ export class ProgressRepository {
     return this.prisma.goal.update({
       where: { id },
       data: {
+        ...(data.type !== undefined ? { type: data.type } : {}),
         ...(data.targetValue !== undefined
           ? { targetValue: data.targetValue }
           : {}),

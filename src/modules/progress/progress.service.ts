@@ -123,6 +123,7 @@ export class ProgressService {
         : undefined;
 
     const updatedGoal = await this.progressRepository.updateGoal(goalId, {
+      type: dto.type,
       targetValue: dto.targetValue,
       currentValue: dto.currentValue,
       deadline,
