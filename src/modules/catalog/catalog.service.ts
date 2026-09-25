@@ -171,10 +171,11 @@ export class CatalogService implements OnApplicationBootstrap {
     if (total === 0 && search && search.trim().length > 1) {
       this.logger.log(`No local catalog results for '${search}'. Querying AscendAPI fallback...`);
       try {
-        const externalExercises = await this.ascendApiService.searchExercises(search.trim(), 10);
+        const externalExercises = await this.ascendApiService.searchExercises(search.trim(), 5);
         if (externalExercises.length > 0) {
           for (const ext of externalExercises) {
-            await this.upsertFromAscendDto(ext);
+            const fullDetails = await this.ascendApiService.getExerciseById(ext.exerciseId);
+            await this.upsertFromAscendDto(fullDetails || ext);
           }
           // Re-query local DB after caching
           [items, total] = await Promise.all([
@@ -202,12 +203,27 @@ export class CatalogService implements OnApplicationBootstrap {
   }
 
   async getExerciseById(id: string): Promise<CatalogExerciseResponseDto> {
-    const item = await this.prisma.exerciseCatalog.findFirst({
+    let item = await this.prisma.exerciseCatalog.findFirst({
       where: {
         OR: [{ id }, { externalId: id }],
       },
       include: { equipment: true },
     });
+
+    if (item && (!item.videoUrl || item.instructions.length === 0) && item.externalId) {
+      try {
+        const ext = await this.ascendApiService.getExerciseById(item.externalId);
+        if (ext) {
+          await this.upsertFromAscendDto(ext);
+          item = await this.prisma.exerciseCatalog.findUnique({
+            where: { id: item.id },
+            include: { equipment: true },
+          });
+        }
+      } catch (err) {
+        this.logger.warn(`Could not enrich exercise ${id}: ${(err as Error).message}`);
+      }
+    }
 
     if (!item) {
       // Try fetching from AscendAPI directly if ID is external

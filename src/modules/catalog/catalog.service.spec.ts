@@ -110,7 +110,7 @@ describe('CatalogService', () => {
         offset: 0,
       });
 
-      expect(ascendApiService.searchExercises).toHaveBeenCalledWith('bench', 10);
+      expect(ascendApiService.searchExercises).toHaveBeenCalledWith('bench', 5);
       expect(result.items).toHaveLength(1);
     });
   });
