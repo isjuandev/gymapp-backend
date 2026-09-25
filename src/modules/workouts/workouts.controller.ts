@@ -6,6 +6,7 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -38,6 +39,24 @@ export class WorkoutsController {
     private readonly workoutsService: WorkoutsService,
     private readonly exercisesService: ExercisesService,
   ) {}
+
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'List workouts, optionally filtered by programId',
+    description: 'Accessible by any authenticated member or admin',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'List of workouts',
+    type: [WorkoutResponseDto],
+  })
+  async getWorkouts(
+    @Query('programId') programId?: string,
+  ): Promise<WorkoutResponseDto[]> {
+    return this.workoutsService.getWorkouts(programId);
+  }
 
   @Get(':id')
   @UseGuards(JwtAuthGuard)

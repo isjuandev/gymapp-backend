@@ -51,6 +51,13 @@ export class WorkoutsService {
     };
   }
 
+  async getWorkouts(programId?: string): Promise<WorkoutResponseDto[]> {
+    const workouts = programId
+      ? await this.workoutsRepository.findByProgramId(programId)
+      : await this.workoutsRepository.findAll();
+    return workouts.map((w) => WorkoutResponseDto.fromEntity(w));
+  }
+
   async createWorkout(dto: CreateWorkoutDto): Promise<WorkoutResponseDto> {
     const program = await this.programsRepository.findById(dto.programId);
     if (!program) {

@@ -55,12 +55,34 @@ export class ProgressService {
     return entries.map((entry) => this.toWeightEntryResponseDto(entry));
   }
 
+  async getAllGoals(userId: string): Promise<GoalResponseDto[]> {
+    const goals = await this.progressRepository.findGoals(userId);
+    return goals.map((g) => this.toGoalResponseDto(g));
+  }
+
   async getCurrentGoal(userId: string): Promise<GoalResponseDto> {
     const goal = await this.progressRepository.findActiveGoal(userId);
     if (!goal) {
       throw new NotFoundException('No active goal found for this user');
     }
     return this.toGoalResponseDto(goal);
+  }
+
+  async deleteGoal(
+    userId: string,
+    goalId: string,
+  ): Promise<{ message: string }> {
+    const existing = await this.progressRepository.findGoalById(goalId);
+    if (!existing) {
+      throw new NotFoundException(`Goal with ID '${goalId}' not found`);
+    }
+    if (existing.userId !== userId) {
+      throw new ForbiddenException(
+        'You do not have permission to delete this goal',
+      );
+    }
+    await this.progressRepository.deleteGoal(goalId);
+    return { message: `Goal with ID '${goalId}' deleted successfully` };
   }
 
   async createGoal(

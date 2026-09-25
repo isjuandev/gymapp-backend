@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Param,
   Body,
   Query,
@@ -74,6 +75,22 @@ export class ProgressController {
     return this.progressService.getWeightEntries(userId, query.range);
   }
 
+  @Get('goals')
+  @ApiOperation({
+    summary: 'Get all fitness goals for the authenticated user',
+    description: 'Returns all goals ordered by creation date descending.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'List of fitness goals',
+    type: [GoalResponseDto],
+  })
+  async getAllGoals(
+    @CurrentUser('userId') userId: string,
+  ): Promise<GoalResponseDto[]> {
+    return this.progressService.getAllGoals(userId);
+  }
+
   @Get('goals/current')
   @ApiOperation({
     summary: 'Get the active fitness goal for the authenticated user',
@@ -139,6 +156,30 @@ export class ProgressController {
     @Body() dto: UpdateGoalDto,
   ): Promise<GoalResponseDto> {
     return this.progressService.updateGoal(userId, id, dto);
+  }
+
+  @Delete('goals/:id')
+  @ApiOperation({
+    summary: 'Delete a fitness goal',
+    description: 'Deletes a goal. Validates user ownership.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Goal deleted successfully',
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Goal not found',
+  })
+  @ApiResponse({
+    status: HttpStatus.FORBIDDEN,
+    description: 'Forbidden: not owner of this goal',
+  })
+  async deleteGoal(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') userId: string,
+  ): Promise<{ message: string }> {
+    return this.progressService.deleteGoal(userId, id);
   }
 
   @Get('stats')

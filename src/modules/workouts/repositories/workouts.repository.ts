@@ -34,6 +34,12 @@ export class WorkoutsRepository {
     });
   }
 
+  async findAll(): Promise<Workout[]> {
+    return this.prisma.workout.findMany({
+      orderBy: { title: 'asc' },
+    });
+  }
+
   async create(data: CreateWorkoutDto): Promise<Workout> {
     return this.prisma.workout.create({
       data,

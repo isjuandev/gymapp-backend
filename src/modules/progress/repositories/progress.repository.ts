@@ -125,8 +125,23 @@ export class ProgressRepository {
     });
   }
 
+  async findGoals(userId: string): Promise<Goal[]> {
+    return this.prisma.goal.findMany({
+      where: { userId },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+  }
+
   async findGoalById(id: string): Promise<Goal | null> {
     return this.prisma.goal.findUnique({
+      where: { id },
+    });
+  }
+
+  async deleteGoal(id: string): Promise<Goal> {
+    return this.prisma.goal.delete({
       where: { id },
     });
   }
