@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gymapp_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gym_user
+      POSTGRES_PASSWORD: gym_password
+      POSTGRES_DB: gym_db
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U gym_user -d gym_db']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    container_name: gymapp_api
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://gym_user:gym_password@postgres:5432/gym_db?schema=public
+      JWT_SECRET: dev_super_secret_jwt_key_at_least_32_chars_long
+      JWT_REFRESH_SECRET: dev_super_secret_jwt_refresh_key_at_least_32_chars
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - /app/node_modules
+
+volumes:
+  postgres_data:
+    driver: local

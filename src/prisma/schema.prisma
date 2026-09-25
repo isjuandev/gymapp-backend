@@ -1,0 +1,459 @@
+// ==============================================================================
+// MULTI-TENANT ARCHITECTURE: SCHEMA-PER-TENANT
+// ------------------------------------------------------------------------------
+// This application is designed as single-tenant per deployed instance.
+// Multi-tenancy across different gyms/clients is handled entirely at the database
+// level (schema-per-tenant isolation):
+//
+// Each client has its own dedicated PostgreSQL schema (e.g. `gym_client1`, `gym_client2`)
+// within a shared PostgreSQL database instance.
+//
+// The API container for a given gym is provisioned with a DATABASE_URL pointing
+// directly to that gym's schema via the `?schema=` query parameter:
+//   DATABASE_URL="postgresql://user:password@host:5432/gym_db?schema=gym_clienteX"
+//
+// Prisma natively resolves and scopes all tables, migrations, and queries to that
+// specific schema. No `tenant_id` columns or application-level tenant isolation logic
+// are needed or permitted in this codebase.
+// ==============================================================================
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==============================================================================
+// ENUMS
+// ==============================================================================
+
+enum UserRole {
+  MEMBER
+  ADMIN
+
+  @@map("user_role")
+}
+
+enum ProgramCategory {
+  WEIGHT_LOSS
+  MUSCLE_GAIN
+  HEALTH
+
+  @@map("program_category")
+}
+
+enum ProgramLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+
+  @@map("program_level")
+}
+
+enum ProgramLocation {
+  HOME
+  GYM
+  HOME_AND_GYM
+
+  @@map("program_location")
+}
+
+enum WorkoutSessionStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  SKIPPED
+
+  @@map("workout_session_status")
+}
+
+enum PlanDayStatus {
+  UPCOMING
+  COMPLETED
+  MISSED
+
+  @@map("plan_day_status")
+}
+
+enum GoalType {
+  LOSE_WEIGHT
+  GAIN_MUSCLE
+  IMPROVE_HEALTH
+
+  @@map("goal_type")
+}
+
+enum MealType {
+  BREAKFAST
+  LUNCH
+  DINNER
+  SNACK
+
+  @@map("meal_type")
+}
+
+enum MuscleGroup {
+  CHEST
+  BACK
+  LEGS
+  SHOULDERS
+  ARMS
+  CORE
+  CARDIO
+  FULL_BODY
+
+  @@map("muscle_group")
+}
+
+enum EquipmentCategory {
+  CARDIO
+  STRENGTH
+  FREE_WEIGHTS
+  BODYWEIGHT
+  ACCESSORY
+
+  @@map("equipment_category")
+}
+
+enum ExperienceLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+
+  @@map("experience_level")
+}
+
+// ==============================================================================
+// MODELS
+// ==============================================================================
+
+model User {
+  id              String    @id @default(uuid())
+  name            String
+  email           String    @unique
+  passwordHash    String    @map("password_hash")
+  avatarAssetName String?   @map("avatar_asset_name")
+  goalType        GoalType? @map("goal_type")
+  joinDate        DateTime  @default(now()) @map("join_date")
+  role            UserRole  @default(MEMBER)
+
+  // Relations
+  workoutSessions          WorkoutSession[]
+  weeklyPlans              WeeklyPlan[]
+  weightEntries            WeightEntry[]
+  goals                    Goal[]
+  activityDailySnapshots   ActivityDailySnapshot[]
+  mealEntries              MealEntry[]
+  posts                    Post[]
+  likes                    Like[]
+  comments                 Comment[]
+  refreshTokens            RefreshToken[]
+  userEquipmentPreferences UserEquipmentPreference[]
+  onboardingProfile        OnboardingProfile?
+
+  @@map("users")
+}
+
+model Program {
+  id             String          @id @default(uuid())
+  title          String
+  category       ProgramCategory
+  durationWeeks  Int             @map("duration_weeks")
+  level          ProgramLevel
+  location       ProgramLocation
+  tagline        String
+  imageAssetName String          @map("image_asset_name")
+
+  // Relations
+  workouts Workout[]
+
+  @@map("programs")
+}
+
+model Workout {
+  id              String @id @default(uuid())
+  programId       String @map("program_id")
+  title           String
+  durationMinutes Int    @map("duration_minutes")
+  difficulty      String
+  kcalEstimate    Int    @map("kcal_estimate")
+  imageAssetName  String @map("image_asset_name")
+  rounds          Int
+
+  // Relations
+  program         Program          @relation(fields: [programId], references: [id], onDelete: Cascade)
+  exercises       Exercise[]
+  workoutSessions WorkoutSession[]
+  planDays        PlanDay[]
+
+  @@index([programId])
+  @@map("workouts")
+}
+
+model Exercise {
+  id                  String      @id @default(uuid())
+  workoutId           String      @map("workout_id")
+  name                String
+  order               Int
+  kind                Json // { type: 'reps', count: number } | { type: 'duration', seconds: number }
+  imageAssetName      String      @map("image_asset_name")
+  primaryMuscleGroup  MuscleGroup @default(FULL_BODY) @map("primary_muscle_group")
+  requiredEquipmentId String?     @map("required_equipment_id")
+  substitutionGroupId String?     @map("substitution_group_id")
+
+  // Relations
+  workout           Workout    @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+  requiredEquipment Equipment? @relation(fields: [requiredEquipmentId], references: [id], onDelete: SetNull)
+
+  @@index([workoutId])
+  @@index([substitutionGroupId])
+  @@index([requiredEquipmentId])
+  @@map("exercises")
+}
+
+model Equipment {
+  id               String            @id @default(uuid())
+  name             String
+  category         EquipmentCategory
+  imageAssetName   String            @map("image_asset_name")
+  isAvailableAtGym Boolean           @default(true) @map("is_available_at_gym")
+
+  // Relations
+  exercises       Exercise[]
+  userPreferences UserEquipmentPreference[]
+
+  @@map("equipment")
+}
+
+model UserEquipmentPreference {
+  id          String  @id @default(uuid())
+  userId      String  @map("user_id")
+  equipmentId String  @map("equipment_id")
+  isSelected  Boolean @default(true) @map("is_selected")
+
+  // Relations
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, equipmentId])
+  @@index([userId])
+  @@index([equipmentId])
+  @@map("user_equipment_preferences")
+}
+
+model OnboardingProfile {
+  id                 String          @id @default(uuid())
+  userId             String          @unique @map("user_id")
+  goal               GoalType
+  experienceLevel    ExperienceLevel @map("experience_level")
+  workoutDaysPerWeek Int             @map("workout_days_per_week")
+  completedAt        DateTime?       @map("completed_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("onboarding_profiles")
+}
+
+model WorkoutSession {
+  id                    String               @id @default(uuid())
+  userId                String               @map("user_id")
+  workoutId             String               @map("workout_id")
+  date                  DateTime
+  status                WorkoutSessionStatus
+  durationActualSeconds Int?                 @map("duration_actual_seconds")
+  kcalBurned            Int?                 @map("kcal_burned")
+  avgHeartRate          Int?                 @map("avg_heart_rate")
+
+  // Relations
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workout Workout @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+  posts   Post[]
+
+  @@index([userId, date])
+  @@index([workoutId])
+  @@map("workout_sessions")
+}
+
+model WeeklyPlan {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  weekStartDate DateTime @map("week_start_date")
+
+  // Relations
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  days PlanDay[]
+
+  @@index([userId])
+  @@map("weekly_plans")
+}
+
+model PlanDay {
+  id           String        @id @default(uuid())
+  weeklyPlanId String        @map("weekly_plan_id")
+  date         DateTime
+  workoutId    String?       @map("workout_id")
+  isRestDay    Boolean       @map("is_rest_day")
+  status       PlanDayStatus
+
+  // Relations
+  weeklyPlan WeeklyPlan @relation(fields: [weeklyPlanId], references: [id], onDelete: Cascade)
+  workout    Workout?   @relation(fields: [workoutId], references: [id], onDelete: SetNull)
+
+  @@index([weeklyPlanId])
+  @@index([workoutId])
+  @@map("plan_days")
+}
+
+model WeightEntry {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  date      DateTime
+  weightKg  Float    @map("weight_kg")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+  @@map("weight_entries")
+}
+
+model Goal {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  type         GoalType
+  targetValue  Float     @map("target_value")
+  currentValue Float     @map("current_value")
+  deadline     DateTime?
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, createdAt])
+  @@map("goals")
+}
+
+model ActivityDailySnapshot {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  date          DateTime
+  steps         Int
+  stepsGoal     Int      @map("steps_goal")
+  caloriesActive Float   @map("calories_active")
+  sleepHours    Float    @map("sleep_hours")
+  avgHeartRate  Int?     @map("avg_heart_rate")
+  distanceKm    Float    @map("distance_km")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+  @@map("activity_daily_snapshots")
+}
+
+model Meal {
+  id             String   @id @default(uuid())
+  name           String
+  kcal           Int
+  macros         Json // { protein: number, carbs: number, fat: number }
+  type           MealType
+  imageAssetName String   @map("image_asset_name")
+
+  // Relations
+  mealEntries MealEntry[]
+
+  @@map("meals")
+}
+
+model MealEntry {
+  id       String   @id @default(uuid())
+  userId   String   @map("user_id")
+  mealId   String   @map("meal_id")
+  date     DateTime
+  consumed Boolean
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  meal Meal @relation(fields: [mealId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mealId, date])
+  @@index([userId, date])
+  @@index([mealId])
+  @@map("meal_entries")
+}
+
+model Post {
+  id                     String   @id @default(uuid())
+  userId                 String   @map("user_id")
+  content                String
+  imageAssetName         String?  @map("image_asset_name")
+  relatedWorkoutSessionId String? @map("related_workout_session_id")
+  createdAt              DateTime @default(now()) @map("created_at")
+  likeCount              Int      @default(0) @map("like_count")
+  commentCount           Int      @default(0) @map("comment_count")
+
+  // Relations
+  user                  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  relatedWorkoutSession WorkoutSession? @relation(fields: [relatedWorkoutSessionId], references: [id], onDelete: SetNull)
+  likes                 Like[]
+  comments              Comment[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("posts")
+}
+
+model Like {
+  id        String   @id @default(uuid())
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([userId])
+  @@map("likes")
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@index([userId])
+  @@map("comments")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash")
+  revoked   Boolean  @default(false)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
