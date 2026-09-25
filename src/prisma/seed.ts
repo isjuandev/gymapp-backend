@@ -20,12 +20,15 @@ async function main() {
   // 1. Create or update Users
   const adminUser = await prisma.user.upsert({
     where: { email: 'admin@gymapp.com' },
-    update: {},
+    update: {
+      passwordHash:
+        '$2b$10$BtDuZ9BdSP5A88jlL6Mfr.8S4tc/RBXAabCI2cCnRKmc1pmkrIusa', // bcrypt for "AdminPass123!"
+    },
     create: {
       name: 'Admin Gym',
       email: 'admin@gymapp.com',
       passwordHash:
-        '$2b$10$e8w6a5D26iQnEaI0p.7YeuN3WpCgY07pS9P8G34sXv1K.1sR0t6.q', // bcrypt for "AdminPass123!"
+        '$2b$10$BtDuZ9BdSP5A88jlL6Mfr.8S4tc/RBXAabCI2cCnRKmc1pmkrIusa', // bcrypt for "AdminPass123!"
       role: UserRole.ADMIN,
       avatarAssetName: 'avatar_admin',
     },
@@ -33,12 +36,15 @@ async function main() {
 
   const memberUser = await prisma.user.upsert({
     where: { email: 'juan.perez@example.com' },
-    update: {},
+    update: {
+      passwordHash:
+        '$2b$10$5E3mE5lDNAajGi5/LVApi.nZPs0/pcoSwM//eETyPe2YnXTlHO.ze', // bcrypt for "MemberPass123!"
+    },
     create: {
       name: 'Juan Pérez',
       email: 'juan.perez@example.com',
       passwordHash:
-        '$2b$10$e8w6a5D26iQnEaI0p.7YeuN3WpCgY07pS9P8G34sXv1K.1sR0t6.q', // bcrypt for "MemberPass123!"
+        '$2b$10$5E3mE5lDNAajGi5/LVApi.nZPs0/pcoSwM//eETyPe2YnXTlHO.ze', // bcrypt for "MemberPass123!"
       role: UserRole.MEMBER,
       avatarAssetName: 'avatar_user1',
       goalType: GoalType.LOSE_WEIGHT,
