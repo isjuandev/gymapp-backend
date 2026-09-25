@@ -7,6 +7,7 @@ export interface CreateUserData {
   email: string;
   passwordHash: string;
   role?: UserRole;
+  appleId?: string;
 }
 
 export interface SaveRefreshTokenData {
@@ -31,6 +32,22 @@ export class AuthRepository {
     });
   }
 
+  async findUserByAppleId(appleId: string): Promise<User | null> {
+    return this.prisma.user.findFirst({
+      where: { appleId },
+    });
+  }
+
+  async updateUser(
+    id: string,
+    data: { name?: string; appleId?: string },
+  ): Promise<User> {
+    return this.prisma.user.update({
+      where: { id },
+      data,
+    });
+  }
+
   async createUser(data: CreateUserData): Promise<User> {
     return this.prisma.user.create({
       data: {
@@ -38,6 +55,7 @@ export class AuthRepository {
         email: data.email.toLowerCase(),
         passwordHash: data.passwordHash,
         role: data.role ?? UserRole.MEMBER,
+        appleId: data.appleId,
       },
     });
   }

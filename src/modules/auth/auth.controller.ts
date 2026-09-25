@@ -17,6 +17,7 @@ import {
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { AppleLoginDto } from './dto/apple-login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { UserResponseDto } from './dto/user-response.dto';
@@ -67,6 +68,22 @@ export class AuthController {
   })
   async login(@Body() dto: LoginDto): Promise<AuthResponseDto> {
     return this.authService.login(dto);
+  }
+
+  @Post('apple')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Authenticate user with Sign in with Apple' })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Apple authentication successful, returns JWT tokens and user profile',
+    type: AuthResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.BAD_REQUEST,
+    description: 'Invalid Apple credentials or identity token',
+  })
+  async appleLogin(@Body() dto: AppleLoginDto): Promise<AuthResponseDto> {
+    return this.authService.appleLogin(dto);
   }
 
   @Post('refresh')

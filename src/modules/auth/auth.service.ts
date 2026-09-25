@@ -2,6 +2,7 @@ import {
   Injectable,
   ConflictException,
   UnauthorizedException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -11,6 +12,7 @@ import * as crypto from 'crypto';
 import { AuthRepository } from './repositories/auth.repository';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { AppleLoginDto } from './dto/apple-login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { UserResponseDto } from './dto/user-response.dto';
@@ -79,6 +81,82 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    const tokens = await this.generateTokens(user);
+
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      user: UserResponseDto.fromEntity(user),
+    };
+  }
+
+  async appleLogin(dto: AppleLoginDto): Promise<AuthResponseDto> {
+    const userIdentifier = dto.userIdentifier?.trim();
+    if (!userIdentifier) {
+      throw new BadRequestException('userIdentifier is required');
+    }
+
+    // 1. Try to extract email from Apple identityToken payload if not provided
+    let email = dto.email?.trim().toLowerCase();
+    if (!email && dto.identityToken) {
+      try {
+        const parts = dto.identityToken.split('.');
+        if (parts.length >= 2) {
+          const payloadJson = Buffer.from(parts[1], 'base64').toString('utf-8');
+          const payload = JSON.parse(payloadJson);
+          if (payload && payload.email) {
+            email = String(payload.email).trim().toLowerCase();
+          }
+        }
+      } catch (e) {
+        this.logger.warn(
+          `Could not parse Apple identityToken payload: ${(e as Error).message}`,
+        );
+      }
+    }
+
+    // Fallback deterministic email if still missing
+    if (!email) {
+      email = `apple_${userIdentifier}@privaterelay.appleid.com`;
+    }
+
+    const name = dto.fullName?.trim() || 'Usuario Apple';
+
+    // 2. Find existing user by appleId OR by email
+    let user = await this.authRepository.findUserByAppleId(userIdentifier);
+    if (!user) {
+      user = await this.authRepository.findUserByEmail(email);
+    }
+
+    if (user) {
+      // If user exists, ensure appleId is linked and name is updated if placeholder
+      const needsAppleId = !user.appleId;
+      const needsNameUpdate =
+        (user.name === 'Usuario Apple' || !user.name) &&
+        name !== 'Usuario Apple';
+
+      if (needsAppleId || needsNameUpdate) {
+        user = await this.authRepository.updateUser(user.id, {
+          appleId: user.appleId ?? userIdentifier,
+          name: needsNameUpdate ? name : undefined,
+        });
+      }
+    } else {
+      // Create new user for Apple Sign In
+      const dummyPasswordHash = await bcrypt.hash(
+        crypto.randomUUID(),
+        this.saltRounds,
+      );
+      user = await this.authRepository.createUser({
+        name,
+        email,
+        passwordHash: dummyPasswordHash,
+        role: UserRole.MEMBER,
+        appleId: userIdentifier,
+      });
+    }
+
+    // 3. Issue fresh tokens
     const tokens = await this.generateTokens(user);
 
     return {

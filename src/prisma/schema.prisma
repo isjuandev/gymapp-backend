@@ -136,6 +136,7 @@ model User {
   name            String
   email           String    @unique
   passwordHash    String    @map("password_hash")
+  appleId         String?   @unique @map("apple_id")
   avatarAssetName String?   @map("avatar_asset_name")
   goalType        GoalType? @map("goal_type")
   joinDate        DateTime  @default(now()) @map("join_date")
