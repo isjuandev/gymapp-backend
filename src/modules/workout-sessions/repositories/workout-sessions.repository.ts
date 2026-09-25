@@ -274,4 +274,40 @@ export class WorkoutSessionsRepository {
       },
     });
   }
+
+  async findExerciseSessionHistory(userId: string, exerciseId: string) {
+    return this.prisma.exerciseSetLog.findMany({
+      where: {
+        exerciseId,
+        workoutSession: { userId },
+        isWarmup: false,
+      },
+      include: {
+        workoutSession: true,
+      },
+      orderBy: { completedAt: 'desc' },
+    });
+  }
+
+  async updateExerciseNotes(userId: string, exerciseId: string, notes: string): Promise<ExerciseProgressState> {
+    return this.prisma.exerciseProgressState.upsert({
+      where: {
+        userId_exerciseId: {
+          userId,
+          exerciseId,
+        },
+      },
+      create: {
+        userId,
+        exerciseId,
+        currentWorkingWeightKg: 0,
+        consecutiveSessionsAtTarget: 0,
+        notes,
+      },
+      update: {
+        notes,
+      },
+    });
+  }
 }
+

@@ -100,6 +100,7 @@ export class PrismaService
         );`,
         `CREATE INDEX IF NOT EXISTS "exercise_progress_states_user_id_idx" ON "exercise_progress_states"("user_id");`,
         `CREATE INDEX IF NOT EXISTS "exercise_progress_states_exercise_id_idx" ON "exercise_progress_states"("exercise_id");`,
+        `ALTER TABLE "exercise_progress_states" ADD COLUMN IF NOT EXISTS "notes" TEXT;`,
       ];
 
       for (const statement of migrationStatements) {

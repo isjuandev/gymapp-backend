@@ -373,6 +373,7 @@ model ExerciseProgressState {
   consecutiveSessionsAtTarget Int       @default(0) @map("consecutive_sessions_at_target")
   suggestedNextWeightKg       Float?    @map("suggested_next_weight_kg")
   lastSessionDate             DateTime? @map("last_session_date")
+  notes                       String?   @map("notes")
   lastUpdated                 DateTime  @default(now()) @updatedAt @map("last_updated")
 
   user                        User      @relation(fields: [userId], references: [id], onDelete: Cascade)

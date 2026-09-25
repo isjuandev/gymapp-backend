@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exercise, MuscleGroup } from '@prisma/client';
 import { ExerciseKindDto } from './create-exercise.dto';
 import { ResolvedExercise } from '../../recommendation/recommendation.service';
@@ -88,8 +88,66 @@ export class ExerciseResponseDto {
   })
   noEquipmentAvailable?: boolean;
 
+  @ApiPropertyOptional({ example: 8 })
+  minReps?: number;
+
+  @ApiPropertyOptional({ example: 12 })
+  maxReps?: number;
+
+  @ApiPropertyOptional({ example: 3 })
+  defaultSets?: number;
+
+  @ApiPropertyOptional({
+    example: 4,
+    description: 'Suggested working sets tailored to user goal',
+  })
+  suggestedSets?: number;
+
+  @ApiPropertyOptional({ example: 8 })
+  suggestedMinReps?: number;
+
+  @ApiPropertyOptional({ example: 12 })
+  suggestedMaxReps?: number;
+
+  @ApiPropertyOptional({
+    example: 20.0,
+    description: 'Suggested working weight in kg tailored to user level and equipment',
+  })
+  suggestedWeightKg?: number;
+
+  @ApiPropertyOptional({
+    example: '20->24 kg',
+    description: 'Display string for weight progression or baseline',
+  })
+  suggestedWeightLabel?: string;
+
+  @ApiPropertyOptional({ example: 90 })
+  restSeconds?: number;
+
+  @ApiPropertyOptional({ example: ['Mantén la espalda apoyada', 'Baja controlando el peso'] })
+  instructions?: string[];
+
+  @ApiPropertyOptional({ example: 'https://cdn.exercisedb.dev/videos/bench_press.mp4' })
+  videoUrl?: string | null;
+
+  @ApiPropertyOptional({ example: 'https://cdn.exercisedb.dev/images/bench_press.jpg' })
+  imageUrl?: string | null;
+
+  @ApiPropertyOptional({ example: 'Ajustar banco a 30 grados.' })
+  userNotes?: string | null;
+
+  @ApiPropertyOptional({
+    example: { weightKg: 24.0, reps: 7, date: '2026-09-20', estimated1RM: 29.6 },
+  })
+  personalRecord?: {
+    weightKg: number;
+    reps: number;
+    date: string;
+    estimated1RM: number;
+  } | null;
+
   static fromEntity(
-    exercise: Exercise,
+    exercise: any,
     substitutionInfo?: {
       wasSubstituted?: boolean;
       originalExerciseId?: string | null;
@@ -110,6 +168,20 @@ export class ExerciseResponseDto {
       wasSubstituted: substitutionInfo?.wasSubstituted ?? false,
       originalExerciseId: substitutionInfo?.originalExerciseId ?? null,
       noEquipmentAvailable: substitutionInfo?.noEquipmentAvailable ?? false,
+      minReps: exercise.minReps ?? 8,
+      maxReps: exercise.maxReps ?? 12,
+      defaultSets: exercise.defaultSets ?? 3,
+      suggestedSets: exercise.defaultSets ?? 3,
+      suggestedMinReps: exercise.minReps ?? 8,
+      suggestedMaxReps: exercise.maxReps ?? 12,
+      suggestedWeightKg: 0,
+      suggestedWeightLabel: '0 kg',
+      restSeconds: exercise.restSeconds ?? 90,
+      instructions: exercise.instructions ?? [],
+      videoUrl: exercise.videoUrl ?? null,
+      imageUrl: exercise.imageUrl ?? null,
+      userNotes: null,
+      personalRecord: null,
     };
   }
 
@@ -130,6 +202,20 @@ export class ExerciseResponseDto {
       wasSubstituted: resolved.wasSubstituted,
       originalExerciseId: resolved.originalExerciseId ?? null,
       noEquipmentAvailable: resolved.noEquipmentAvailable,
+      minReps: resolved.minReps,
+      maxReps: resolved.maxReps,
+      defaultSets: resolved.defaultSets,
+      suggestedSets: resolved.suggestedSets,
+      suggestedMinReps: resolved.suggestedMinReps,
+      suggestedMaxReps: resolved.suggestedMaxReps,
+      suggestedWeightKg: resolved.suggestedWeightKg,
+      suggestedWeightLabel: resolved.suggestedWeightLabel,
+      restSeconds: resolved.restSeconds,
+      instructions: resolved.instructions,
+      videoUrl: resolved.videoUrl ?? null,
+      imageUrl: resolved.imageUrl ?? null,
+      userNotes: resolved.userNotes ?? null,
+      personalRecord: resolved.personalRecord ?? null,
     };
   }
 }

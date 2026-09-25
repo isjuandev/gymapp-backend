@@ -471,4 +471,135 @@ export class WorkoutSessionsService {
       };
     });
   }
+
+  /**
+   * Get exercise history table and PR for a specific exercise and authenticated user.
+   */
+  async getExerciseHistory(
+    userId: string,
+    exerciseId: string,
+  ): Promise<any> {
+    const exercise =
+      await this.workoutSessionsRepository.findExerciseWithDetails(exerciseId);
+    if (!exercise) {
+      throw new NotFoundException(
+        `Exercise with ID '${exerciseId}' not found`,
+      );
+    }
+
+    const progress = await this.workoutSessionsRepository.findProgressState(
+      userId,
+      exerciseId,
+    );
+
+    const logs =
+      await this.workoutSessionsRepository.findExerciseSessionHistory(
+        userId,
+        exerciseId,
+      );
+
+    // Group logs by workoutSessionId
+    const sessionsMap = new Map<string, typeof logs>();
+    for (const log of logs) {
+      const existing = sessionsMap.get(log.workoutSessionId) || [];
+      existing.push(log);
+      sessionsMap.set(log.workoutSessionId, existing);
+    }
+
+    const historyItems: {
+      date: string;
+      bestWeightKg: number;
+      bestReps: number;
+      isPR: boolean;
+      estimated1RM: number;
+      totalSets: number;
+    }[] = [];
+
+    let overallMax1RM = 0;
+    let overallBestSet: {
+      weightKg: number;
+      reps: number;
+      date: string;
+      estimated1RM: number;
+    } | null = null;
+
+    for (const [, sessionLogs] of sessionsMap.entries()) {
+      if (sessionLogs.length === 0) continue;
+
+      // Sort sets in this session to find the best set by weight then reps
+      const sortedSets = [...sessionLogs].sort((a, b) => {
+        if (b.weightKg !== a.weightKg) return b.weightKg - a.weightKg;
+        return b.reps - a.reps;
+      });
+
+      const best = sortedSets[0];
+      const est1RM =
+        Math.round(best.weightKg * (1 + best.reps / 30) * 10) / 10;
+      const dateStr = best.completedAt.toISOString().split('T')[0];
+
+      if (est1RM > overallMax1RM) {
+        overallMax1RM = est1RM;
+        overallBestSet = {
+          weightKg: best.weightKg,
+          reps: best.reps,
+          date: dateStr,
+          estimated1RM: est1RM,
+        };
+      }
+
+      historyItems.push({
+        date: dateStr,
+        bestWeightKg: best.weightKg,
+        bestReps: best.reps,
+        isPR: false, // Flagged below
+        estimated1RM: est1RM,
+        totalSets: sessionLogs.length,
+      });
+    }
+
+    // Flag the PR session(s)
+    if (overallBestSet) {
+      for (const item of historyItems) {
+        if (item.estimated1RM === overallMax1RM) {
+          item.isPR = true;
+        }
+      }
+    }
+
+    return {
+      exerciseId: exercise.id,
+      exerciseName: exercise.name,
+      userNotes: progress?.notes ?? null,
+      personalRecord: overallBestSet,
+      history: historyItems,
+    };
+  }
+
+  /**
+   * Update personal notes for an exercise.
+   */
+  async updateExerciseNotes(
+    userId: string,
+    exerciseId: string,
+    notes: string,
+  ): Promise<{ message: string; notes: string }> {
+    const exercise =
+      await this.workoutSessionsRepository.findExerciseWithDetails(exerciseId);
+    if (!exercise) {
+      throw new NotFoundException(
+        `Exercise with ID '${exerciseId}' not found`,
+      );
+    }
+
+    const updated = await this.workoutSessionsRepository.updateExerciseNotes(
+      userId,
+      exerciseId,
+      notes,
+    );
+
+    return {
+      message: 'Exercise notes updated successfully',
+      notes: updated.notes ?? '',
+    };
+  }
 }

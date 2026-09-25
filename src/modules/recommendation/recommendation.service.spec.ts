@@ -453,6 +453,34 @@ describe('RecommendationService', () => {
       expect(result.noEquipmentAvailable).toBe(true);
     });
 
+    it('should personalize series, reps and weight according to user goal and experience level', async () => {
+      prisma.exercise.findUnique.mockResolvedValue({
+        ...exerciseBarbell,
+        name: 'Press de Banca Plano con Barra',
+      });
+      prisma.userEquipmentPreference.findUnique.mockResolvedValue({
+        userId,
+        equipmentId: 'eq-barbell',
+        isSelected: true,
+      });
+      prisma.onboardingProfile.findUnique.mockResolvedValue({
+        userId,
+        goal: GoalType.GAIN_MUSCLE,
+        experienceLevel: ExperienceLevel.INTERMEDIATE,
+      });
+
+      const result = await service.resolveExerciseForUser(
+        exerciseBarbell.id,
+        userId,
+      );
+
+      expect(result.suggestedSets).toBe(4);
+      expect(result.suggestedMinReps).toBe(8);
+      expect(result.suggestedMaxReps).toBe(12);
+      expect(result.suggestedWeightKg).toBe(50);
+      expect(result.suggestedWeightLabel).toBe('50->60 kg');
+    });
+
     it('should throw NotFoundException if exercise does not exist', async () => {
       prisma.exercise.findUnique.mockResolvedValue(null);
 

@@ -25,12 +25,31 @@ export interface ResolvedExercise {
   order: number;
   kind: any;
   imageAssetName: string;
+  videoUrl?: string | null;
+  imageUrl?: string | null;
+  instructions: string[];
   primaryMuscleGroup: MuscleGroup;
   requiredEquipmentId: string | null;
   substitutionGroupId: string | null;
   wasSubstituted: boolean;
   originalExerciseId?: string | null;
   noEquipmentAvailable: boolean;
+  minReps: number;
+  maxReps: number;
+  defaultSets: number;
+  restSeconds: number;
+  suggestedSets: number;
+  suggestedMinReps: number;
+  suggestedMaxReps: number;
+  suggestedWeightKg: number;
+  suggestedWeightLabel: string;
+  userNotes?: string | null;
+  personalRecord?: {
+    weightKg: number;
+    reps: number;
+    date: string;
+    estimated1RM: number;
+  } | null;
 }
 
 export const GOAL_TO_CATEGORY: Record<GoalType, ProgramCategory> = {
@@ -273,119 +292,311 @@ export class RecommendationService {
   ): Promise<ResolvedExercise> {
     const exercise = await this.prisma.exercise.findUnique({
       where: { id: exerciseId },
+      include: {
+        requiredEquipment: true,
+        catalogItem: {
+          include: {
+            equipment: true,
+          },
+        },
+      },
     });
 
     if (!exercise) {
       throw new NotFoundException(`Exercise with ID '${exerciseId}' not found`);
     }
 
-    // a) Bodyweight exercise: no equipment required
-    if (!exercise.requiredEquipmentId) {
-      return {
-        id: exercise.id,
-        name: exercise.name,
-        order: exercise.order,
-        kind: exercise.kind,
-        imageAssetName: exercise.imageAssetName,
-        primaryMuscleGroup: exercise.primaryMuscleGroup,
-        requiredEquipmentId: null,
-        substitutionGroupId: exercise.substitutionGroupId,
-        wasSubstituted: false,
-        originalExerciseId: null,
-        noEquipmentAvailable: false,
-      };
-    }
+    let chosenExercise: any = exercise;
+    let wasSubstituted = false;
+    let originalExerciseId: string | null = null;
+    let noEquipmentAvailable = false;
 
-    // b) Check user equipment preference for required equipment
-    const userPref = await this.prisma.userEquipmentPreference.findUnique({
-      where: {
-        userId_equipmentId: {
-          userId,
-          equipmentId: exercise.requiredEquipmentId,
-        },
-      },
-    });
-
-    if (userPref && userPref.isSelected) {
-      return {
-        id: exercise.id,
-        name: exercise.name,
-        order: exercise.order,
-        kind: exercise.kind,
-        imageAssetName: exercise.imageAssetName,
-        primaryMuscleGroup: exercise.primaryMuscleGroup,
-        requiredEquipmentId: exercise.requiredEquipmentId,
-        substitutionGroupId: exercise.substitutionGroupId,
-        wasSubstituted: false,
-        originalExerciseId: null,
-        noEquipmentAvailable: false,
-      };
-    }
-
-    // c) Equipment not selected: search substitutes in the same substitution group
-    if (exercise.substitutionGroupId) {
-      const candidateSubstitutes = await this.prisma.exercise.findMany({
+    // Check if equipment is needed and if user selected it
+    if (exercise.requiredEquipmentId) {
+      const userPref = await this.prisma.userEquipmentPreference.findUnique({
         where: {
-          substitutionGroupId: exercise.substitutionGroupId,
-          id: { not: exercise.id },
+          userId_equipmentId: {
+            userId,
+            equipmentId: exercise.requiredEquipmentId,
+          },
         },
-        orderBy: { order: 'asc' },
       });
 
-      if (candidateSubstitutes.length > 0) {
-        const userSelectedPrefs =
-          await this.prisma.userEquipmentPreference.findMany({
+      if (!userPref || !userPref.isSelected) {
+        // Search substitutes in same substitution group
+        if (exercise.substitutionGroupId) {
+          const candidateSubstitutes = await this.prisma.exercise.findMany({
             where: {
-              userId,
-              isSelected: true,
+              substitutionGroupId: exercise.substitutionGroupId,
+              id: { not: exercise.id },
             },
-            select: { equipmentId: true },
+            include: {
+              requiredEquipment: true,
+              catalogItem: {
+                include: {
+                  equipment: true,
+                },
+              },
+            },
+            orderBy: { order: 'asc' },
           });
 
-        const selectedEquipmentIds = new Set(
-          userSelectedPrefs.map((p) => p.equipmentId),
-        );
+          if (candidateSubstitutes.length > 0) {
+            const userSelectedPrefs =
+              await this.prisma.userEquipmentPreference.findMany({
+                where: {
+                  userId,
+                  isSelected: true,
+                },
+                select: { equipmentId: true },
+              });
 
-        // Find candidate where user has equipment selected, or fallback to bodyweight (requiredEquipmentId === null)
-        const validSubstitute =
-          candidateSubstitutes.find(
-            (sub) =>
-              sub.requiredEquipmentId !== null &&
-              selectedEquipmentIds.has(sub.requiredEquipmentId),
-          ) ||
-          candidateSubstitutes.find((sub) => sub.requiredEquipmentId === null);
+            const selectedEquipmentIds = new Set(
+              userSelectedPrefs.map((p) => p.equipmentId),
+            );
 
-        if (validSubstitute) {
-          return {
-            id: validSubstitute.id,
-            name: validSubstitute.name,
-            order: exercise.order, // Preserve original position in workout
-            kind: validSubstitute.kind,
-            imageAssetName: validSubstitute.imageAssetName,
-            primaryMuscleGroup: validSubstitute.primaryMuscleGroup,
-            requiredEquipmentId: validSubstitute.requiredEquipmentId,
-            substitutionGroupId: validSubstitute.substitutionGroupId,
-            wasSubstituted: true,
-            originalExerciseId: exercise.id,
-            noEquipmentAvailable: false,
-          };
+            const validSubstitute =
+              candidateSubstitutes.find(
+                (sub) =>
+                  sub.requiredEquipmentId !== null &&
+                  selectedEquipmentIds.has(sub.requiredEquipmentId),
+              ) ||
+              candidateSubstitutes.find(
+                (sub) => sub.requiredEquipmentId === null,
+              );
+
+            if (validSubstitute) {
+              chosenExercise = validSubstitute;
+              wasSubstituted = true;
+              originalExerciseId = exercise.id;
+            } else {
+              noEquipmentAvailable = true;
+            }
+          } else {
+            noEquipmentAvailable = true;
+          }
+        } else {
+          noEquipmentAvailable = true;
         }
       }
     }
 
-    // d) No substitute found: return original with noEquipmentAvailable flag
+    const personalization = await this.calculatePersonalization(userId, chosenExercise);
+
     return {
-      id: exercise.id,
-      name: exercise.name,
-      order: exercise.order,
-      kind: exercise.kind,
-      imageAssetName: exercise.imageAssetName,
-      primaryMuscleGroup: exercise.primaryMuscleGroup,
-      requiredEquipmentId: exercise.requiredEquipmentId,
-      substitutionGroupId: exercise.substitutionGroupId,
-      wasSubstituted: false,
-      originalExerciseId: null,
-      noEquipmentAvailable: true,
+      id: chosenExercise.id,
+      name: chosenExercise.name,
+      order: exercise.order, // Preserve original position in workout
+      kind: chosenExercise.kind,
+      imageAssetName: chosenExercise.imageAssetName,
+      videoUrl: chosenExercise.videoUrl ?? chosenExercise.catalogItem?.videoUrl ?? null,
+      imageUrl: chosenExercise.imageUrl ?? chosenExercise.catalogItem?.imageUrl ?? null,
+      instructions: chosenExercise.instructions?.length
+        ? chosenExercise.instructions
+        : chosenExercise.catalogItem?.instructions ?? [],
+      primaryMuscleGroup: chosenExercise.primaryMuscleGroup,
+      requiredEquipmentId: chosenExercise.requiredEquipmentId,
+      substitutionGroupId: chosenExercise.substitutionGroupId,
+      wasSubstituted,
+      originalExerciseId,
+      noEquipmentAvailable,
+      minReps: personalization.minReps,
+      maxReps: personalization.maxReps,
+      defaultSets: chosenExercise.defaultSets ?? 3,
+      restSeconds: personalization.restSeconds,
+      suggestedSets: personalization.suggestedSets,
+      suggestedMinReps: personalization.minReps,
+      suggestedMaxReps: personalization.maxReps,
+      suggestedWeightKg: personalization.suggestedWeightKg,
+      suggestedWeightLabel: personalization.suggestedWeightLabel,
+      userNotes: personalization.userNotes,
+      personalRecord: personalization.personalRecord,
+    };
+  }
+
+  private async calculatePersonalization(userId: string, exercise: any) {
+    let profile: any = null;
+    let progress: any = null;
+    let pr: { weightKg: number; reps: number; date: string; estimated1RM: number } | null = null;
+
+    try {
+      if (this.prisma.onboardingProfile?.findUnique) {
+        profile = await this.prisma.onboardingProfile.findUnique({
+          where: { userId },
+        });
+      }
+    } catch {
+      // Safe fallback
+    }
+
+    try {
+      if (this.prisma.exerciseProgressState?.findUnique) {
+        progress = await this.prisma.exerciseProgressState.findUnique({
+          where: {
+            userId_exerciseId: {
+              userId,
+              exerciseId: exercise.id,
+            },
+          },
+        });
+      }
+    } catch {
+      // Safe fallback
+    }
+
+    try {
+      if (this.prisma.exerciseSetLog?.findMany) {
+        const bestLogs = await this.prisma.exerciseSetLog.findMany({
+          where: {
+            exerciseId: exercise.id,
+            workoutSession: { userId },
+            isWarmup: false,
+          },
+          orderBy: [{ weightKg: 'desc' }, { reps: 'desc' }],
+          take: 1,
+        });
+
+        if (bestLogs && bestLogs.length > 0) {
+          const b = bestLogs[0];
+          const est1RM = Math.round(b.weightKg * (1 + b.reps / 30) * 10) / 10;
+          pr = {
+            weightKg: b.weightKg,
+            reps: b.reps,
+            date: b.completedAt.toISOString().split('T')[0],
+            estimated1RM: est1RM,
+          };
+        }
+      }
+    } catch {
+      // Safe fallback
+    }
+
+    // 1. Goal-based sets and reps
+    let suggestedSets = exercise.defaultSets ?? 3;
+    let minReps = exercise.minReps ?? 8;
+    let maxReps = exercise.maxReps ?? 12;
+    let restSeconds = exercise.restSeconds ?? 90;
+
+    if (profile?.goal === GoalType.GAIN_MUSCLE) {
+      suggestedSets = 4;
+      minReps = Math.max(8, exercise.minReps || 8);
+      maxReps = Math.max(12, exercise.maxReps || 12);
+      restSeconds = 90;
+    } else if (profile?.goal === GoalType.LOSE_WEIGHT) {
+      suggestedSets = 4;
+      minReps = 12;
+      maxReps = 15;
+      restSeconds = 60;
+    } else if (profile?.goal === GoalType.IMPROVE_HEALTH) {
+      suggestedSets = 3;
+      minReps = 10;
+      maxReps = 12;
+      restSeconds = 75;
+    }
+
+    // 2. Weights: check existing progress state or calculate baseline
+    let suggestedWeightKg = 0;
+    let suggestedWeightLabel = '0 kg';
+
+    if (progress?.suggestedNextWeightKg && progress.suggestedNextWeightKg > 0) {
+      suggestedWeightKg = Number(progress.suggestedNextWeightKg);
+      suggestedWeightLabel = `${progress.currentWorkingWeightKg}->${progress.suggestedNextWeightKg} kg`;
+    } else if (progress?.currentWorkingWeightKg && progress.currentWorkingWeightKg > 0) {
+      suggestedWeightKg = Number(progress.currentWorkingWeightKg);
+      suggestedWeightLabel = `${progress.currentWorkingWeightKg} kg`;
+    } else {
+      const level = profile?.experienceLevel ?? ExperienceLevel.BEGINNER;
+      const eq = exercise.requiredEquipment ?? exercise.catalogItem?.equipment;
+      const nameCombined = `${exercise.name} ${eq?.name ?? ''}`.toLowerCase();
+
+      const isBodyweight =
+        !exercise.requiredEquipmentId ||
+        nameCombined.includes('corporal') ||
+        nameCombined.includes('bodyweight') ||
+        nameCombined.includes('flexiones') ||
+        nameCombined.includes('plancha');
+      const isDumbbell =
+        nameCombined.includes('mancuerna') || nameCombined.includes('dumbbell');
+      const isBarbell =
+        nameCombined.includes('barra') || nameCombined.includes('barbell');
+      const isCable =
+        nameCombined.includes('polea') || nameCombined.includes('cable');
+      const isMachine =
+        nameCombined.includes('máquina') ||
+        nameCombined.includes('maquina') ||
+        nameCombined.includes('machine') ||
+        nameCombined.includes('prensa');
+
+      if (isBodyweight) {
+        suggestedWeightKg = 0;
+        suggestedWeightLabel = 'Peso corporal';
+      } else if (isDumbbell) {
+        if (level === ExperienceLevel.ADVANCED) {
+          suggestedWeightKg = 26;
+          suggestedWeightLabel = '26->32 kg';
+        } else if (level === ExperienceLevel.INTERMEDIATE) {
+          suggestedWeightKg = 18;
+          suggestedWeightLabel = '18->22 kg';
+        } else {
+          suggestedWeightKg = 10;
+          suggestedWeightLabel = '10->14 kg';
+        }
+      } else if (isBarbell) {
+        if (level === ExperienceLevel.ADVANCED) {
+          suggestedWeightKg = 80;
+          suggestedWeightLabel = '80->95 kg';
+        } else if (level === ExperienceLevel.INTERMEDIATE) {
+          suggestedWeightKg = 50;
+          suggestedWeightLabel = '50->60 kg';
+        } else {
+          suggestedWeightKg = 25;
+          suggestedWeightLabel = '25->30 kg';
+        }
+      } else if (isCable) {
+        if (level === ExperienceLevel.ADVANCED) {
+          suggestedWeightKg = 35;
+          suggestedWeightLabel = '35->50 kg';
+        } else if (level === ExperienceLevel.INTERMEDIATE) {
+          suggestedWeightKg = 20;
+          suggestedWeightLabel = '20->30 kg';
+        } else {
+          suggestedWeightKg = 10;
+          suggestedWeightLabel = '10->15 kg';
+        }
+      } else if (isMachine) {
+        if (level === ExperienceLevel.ADVANCED) {
+          suggestedWeightKg = 65;
+          suggestedWeightLabel = '65->80 kg';
+        } else if (level === ExperienceLevel.INTERMEDIATE) {
+          suggestedWeightKg = 40;
+          suggestedWeightLabel = '40->50 kg';
+        } else {
+          suggestedWeightKg = 20;
+          suggestedWeightLabel = '20->25 kg';
+        }
+      } else {
+        if (level === ExperienceLevel.ADVANCED) {
+          suggestedWeightKg = 35;
+          suggestedWeightLabel = '35 kg';
+        } else if (level === ExperienceLevel.INTERMEDIATE) {
+          suggestedWeightKg = 20;
+          suggestedWeightLabel = '20 kg';
+        } else {
+          suggestedWeightKg = 10;
+          suggestedWeightLabel = '10 kg';
+        }
+      }
+    }
+
+    return {
+      suggestedSets,
+      minReps,
+      maxReps,
+      restSeconds,
+      suggestedWeightKg,
+      suggestedWeightLabel,
+      userNotes: progress?.notes ?? null,
+      personalRecord: pr,
     };
   }
 }

@@ -104,6 +104,47 @@ export class WorkoutSessionsController {
     return this.workoutSessionsService.getExerciseProgress(userId, exerciseId);
   }
 
+  @Get('exercises/:exerciseId/history')
+  @ApiOperation({
+    summary: 'Get exercise past session history, PR and user notes',
+    description: 'Returns PR record, estimated 1RM, notes, and past working sets history table',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Exercise history and PR data',
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Exercise not found',
+  })
+  async getExerciseHistory(
+    @CurrentUser('userId') userId: string,
+    @Param('exerciseId', ParseUUIDPipe) exerciseId: string,
+  ) {
+    return this.workoutSessionsService.getExerciseHistory(userId, exerciseId);
+  }
+
+  @Patch('exercises/:exerciseId/notes')
+  @ApiOperation({
+    summary: 'Update personal notes for an exercise',
+    description: 'Saves or updates custom user notes/cues for this exercise',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Notes updated successfully',
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Exercise not found',
+  })
+  async updateExerciseNotes(
+    @CurrentUser('userId') userId: string,
+    @Param('exerciseId', ParseUUIDPipe) exerciseId: string,
+    @Body() dto: { notes: string },
+  ) {
+    return this.workoutSessionsService.updateExerciseNotes(userId, exerciseId, dto.notes);
+  }
+
   // ============================================================================
   // SESSION SETS ROUTES
   // ============================================================================

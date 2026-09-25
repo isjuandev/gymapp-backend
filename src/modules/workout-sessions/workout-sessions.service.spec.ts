@@ -77,6 +77,8 @@ describe('WorkoutSessionsService', () => {
       findProgressState: jest.fn(),
       findAllProgressStatesForUser: jest.fn(),
       upsertProgressState: jest.fn(),
+      findExerciseSessionHistory: jest.fn(),
+      updateExerciseNotes: jest.fn(),
     };
 
     const mockWorkoutsRepo = {
@@ -329,4 +331,67 @@ describe('WorkoutSessionsService', () => {
       expect(progress.incrementKg).toBe(2.5);
     });
   });
+
+  describe('getExerciseHistory', () => {
+    it('should return session history, identify PR and user notes', async () => {
+      sessionsRepo.findExerciseWithDetails.mockResolvedValue(mockExercise as any);
+      sessionsRepo.findProgressState.mockResolvedValue({
+        id: 'prog-1',
+        userId,
+        exerciseId,
+        currentWorkingWeightKg: 40,
+        notes: 'Ajustar banco a 30 grados',
+      } as any);
+      sessionsRepo.findExerciseSessionHistory.mockResolvedValue([
+        {
+          id: 'log-1',
+          workoutSessionId: 'session-1',
+          exerciseId,
+          setNumber: 1,
+          weightKg: 40,
+          reps: 10,
+          isWarmup: false,
+          completedAt: new Date('2026-09-20T10:00:00Z'),
+        },
+        {
+          id: 'log-2',
+          workoutSessionId: 'session-2',
+          exerciseId,
+          setNumber: 1,
+          weightKg: 45,
+          reps: 8,
+          isWarmup: false,
+          completedAt: new Date('2026-09-25T10:00:00Z'),
+        },
+      ] as any);
+
+      const history = await service.getExerciseHistory(userId, exerciseId);
+
+      expect(history.exerciseId).toBe(exerciseId);
+      expect(history.userNotes).toBe('Ajustar banco a 30 grados');
+      expect(history.personalRecord).not.toBeNull();
+      expect(history.personalRecord?.weightKg).toBe(45);
+      expect(history.personalRecord?.reps).toBe(8);
+      expect(history.history).toHaveLength(2);
+      expect(history.history.find((h: any) => h.bestWeightKg === 45)?.isPR).toBe(true);
+    });
+  });
+
+  describe('updateExerciseNotes', () => {
+    it('should save notes to exercise progress state', async () => {
+      sessionsRepo.findExerciseWithDetails.mockResolvedValue(mockExercise as any);
+      sessionsRepo.updateExerciseNotes.mockResolvedValue({
+        id: 'prog-1',
+        userId,
+        exerciseId,
+        notes: 'Nueva técnica probada',
+      } as any);
+
+      const result = await service.updateExerciseNotes(userId, exerciseId, 'Nueva técnica probada');
+
+      expect(sessionsRepo.updateExerciseNotes).toHaveBeenCalledWith(userId, exerciseId, 'Nueva técnica probada');
+      expect(result.notes).toBe('Nueva técnica probada');
+    });
+  });
 });
+
