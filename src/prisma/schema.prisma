@@ -119,6 +119,19 @@ enum EquipmentCategory {
   @@map("equipment_category")
 }
 
+enum WeightType {
+  FIXED_STACK
+  PLATE_LOADED
+  DUMBBELL_PAIR
+  BARBELL
+  BODYWEIGHT
+  CABLE
+  BAND
+  ACCESSORY
+
+  @@map("weight_type")
+}
+
 enum ExperienceLevel {
   BEGINNER
   INTERMEDIATE
@@ -155,6 +168,7 @@ model User {
   refreshTokens            RefreshToken[]
   userEquipmentPreferences UserEquipmentPreference[]
   onboardingProfile        OnboardingProfile?
+  exerciseProgressStates   ExerciseProgressState[]
 
   @@map("users")
 }
@@ -195,22 +209,67 @@ model Workout {
   @@map("workouts")
 }
 
+model ExerciseCatalog {
+  id                 String            @id @default(uuid())
+  externalId         String?           @unique @map("external_id")
+  name               String
+  nameEs             String?           @map("name_es")
+  videoUrl           String?           @map("video_url")
+  imageUrl           String?           @map("image_url")
+  instructions       String[]          @default([])
+  exerciseTips       String[]          @default([]) @map("exercise_tips")
+  primaryMuscleGroup MuscleGroup       @default(FULL_BODY) @map("primary_muscle_group")
+  targetMuscles      String[]          @default([]) @map("target_muscles")
+  secondaryMuscles   String[]          @default([]) @map("secondary_muscles")
+  equipmentCategory  EquipmentCategory @default(STRENGTH) @map("equipment_category")
+  equipmentName      String?           @map("equipment_name")
+  suggestedMinReps   Int               @default(8) @map("suggested_min_reps")
+  suggestedMaxReps   Int               @default(12) @map("suggested_max_reps")
+  defaultRestSeconds Int               @default(90) @map("default_rest_seconds")
+
+  // Relación con el equipamiento físico
+  equipmentId        String?           @map("equipment_id")
+  equipment          Equipment?        @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+
+  exercises          Exercise[]
+
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+
+  @@index([primaryMuscleGroup])
+  @@index([equipmentCategory])
+  @@index([name])
+  @@map("exercise_catalog")
+}
+
 model Exercise {
   id                  String      @id @default(uuid())
   workoutId           String      @map("workout_id")
+  catalogId           String?     @map("catalog_id")
   name                String
   order               Int
   kind                Json // { type: 'reps', count: number } | { type: 'duration', seconds: number }
   imageAssetName      String      @map("image_asset_name")
+  videoUrl            String?     @map("video_url")
+  imageUrl            String?     @map("image_url")
+  instructions        String[]    @default([])
   primaryMuscleGroup  MuscleGroup @default(FULL_BODY) @map("primary_muscle_group")
   requiredEquipmentId String?     @map("required_equipment_id")
   substitutionGroupId String?     @map("substitution_group_id")
+  minReps             Int         @default(8) @map("min_reps")
+  maxReps             Int         @default(12) @map("max_reps")
+  defaultSets         Int         @default(3) @map("default_sets")
+  restSeconds         Int         @default(90) @map("rest_seconds")
 
   // Relations
-  workout           Workout    @relation(fields: [workoutId], references: [id], onDelete: Cascade)
-  requiredEquipment Equipment? @relation(fields: [requiredEquipmentId], references: [id], onDelete: SetNull)
+  workout             Workout                @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+  catalogItem         ExerciseCatalog?       @relation(fields: [catalogId], references: [id], onDelete: SetNull)
+  requiredEquipment   Equipment?             @relation(fields: [requiredEquipmentId], references: [id], onDelete: SetNull)
+  setLogs             ExerciseSetLog[]
+  progressStates      ExerciseProgressState[]
 
   @@index([workoutId])
+  @@index([catalogId])
   @@index([substitutionGroupId])
   @@index([requiredEquipmentId])
   @@map("exercises")
@@ -220,12 +279,18 @@ model Equipment {
   id               String            @id @default(uuid())
   name             String
   category         EquipmentCategory
+  weightType       WeightType        @default(BODYWEIGHT) @map("weight_type")
+  minWeightKg      Float?            @map("min_weight_kg")
+  maxWeightKg      Float?            @map("max_weight_kg")
+  incrementKg      Float             @default(2.5) @map("increment_kg")
+  externalName     String?           @map("external_name")
   imageAssetName   String            @map("image_asset_name")
   isAvailableAtGym Boolean           @default(true) @map("is_available_at_gym")
 
   // Relations
-  exercises       Exercise[]
-  userPreferences UserEquipmentPreference[]
+  catalogExercises ExerciseCatalog[]
+  exercises        Exercise[]
+  userPreferences  UserEquipmentPreference[]
 
   @@map("equipment")
 }
@@ -274,10 +339,49 @@ model WorkoutSession {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   workout Workout @relation(fields: [workoutId], references: [id], onDelete: Cascade)
   posts   Post[]
+  setLogs ExerciseSetLog[]
 
   @@index([userId, date])
   @@index([workoutId])
   @@map("workout_sessions")
+}
+
+model ExerciseSetLog {
+  id               String         @id @default(uuid())
+  workoutSessionId String         @map("workout_session_id")
+  exerciseId       String         @map("exercise_id")
+  setNumber        Int            @map("set_number")
+  weightKg         Float          @map("weight_kg")
+  reps             Int
+  isWarmup         Boolean        @default(false) @map("is_warmup")
+  rpe              Float?
+  completedAt      DateTime       @default(now()) @map("completed_at")
+
+  workoutSession   WorkoutSession @relation(fields: [workoutSessionId], references: [id], onDelete: Cascade)
+  exercise         Exercise       @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+
+  @@index([workoutSessionId])
+  @@index([exerciseId, completedAt])
+  @@map("exercise_set_logs")
+}
+
+model ExerciseProgressState {
+  id                          String    @id @default(uuid())
+  userId                      String    @map("user_id")
+  exerciseId                  String    @map("exercise_id")
+  currentWorkingWeightKg      Float     @map("current_working_weight_kg")
+  consecutiveSessionsAtTarget Int       @default(0) @map("consecutive_sessions_at_target")
+  suggestedNextWeightKg       Float?    @map("suggested_next_weight_kg")
+  lastSessionDate             DateTime? @map("last_session_date")
+  lastUpdated                 DateTime  @default(now()) @updatedAt @map("last_updated")
+
+  user                        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exercise                    Exercise  @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, exerciseId])
+  @@index([userId])
+  @@index([exerciseId])
+  @@map("exercise_progress_states")
 }
 
 model WeeklyPlan {

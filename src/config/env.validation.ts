@@ -18,6 +18,18 @@ export const envSchema = z.object({
       8,
       'JWT_REFRESH_SECRET is required and must be at least 8 characters long',
     ),
+  RAPIDAPI_KEY: z
+    .string()
+    .optional()
+    .default('99b190a402msh00075f9824c208fp13c131jsna849b85796b9'),
+  RAPIDAPI_HOST: z
+    .string()
+    .default('edb-with-videos-and-images-by-ascendapi.p.rapidapi.com'),
+  ASCEND_API_BASE_URL: z
+    .string()
+    .default(
+      'https://edb-with-videos-and-images-by-ascendapi.p.rapidapi.com',
+    ),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
