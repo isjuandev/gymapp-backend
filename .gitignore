@@ -36,6 +36,7 @@ Thumbs.db
 /backups
 *.sql
 *.sql.gz
+!src/prisma/migrations/**/*.sql
 
 # TypeScript build info
 *.tsbuildinfo
