@@ -15,6 +15,8 @@ import { NutritionModule } from './modules/nutrition/nutrition.module';
 import { EquipmentModule } from './modules/equipment/equipment.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { RecommendationModule } from './modules/recommendation/recommendation.module';
+import { AscendApiModule } from './modules/ascend-api/ascend-api.module';
+import { CatalogModule } from './modules/catalog/catalog.module';
 
 @Module({
   imports: [
@@ -34,6 +36,8 @@ import { RecommendationModule } from './modules/recommendation/recommendation.mo
     EquipmentModule,
     OnboardingModule,
     RecommendationModule,
+    AscendApiModule,
+    CatalogModule,
   ],
   controllers: [AppController],
   providers: [AppService],
