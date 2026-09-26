@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Patch,
   Body,
   HttpCode,
   HttpStatus,
@@ -21,6 +22,7 @@ import { AppleLoginDto } from './dto/apple-login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { UpdateBiometricsDto } from './dto/update-biometrics.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import type { AuthenticatedUser } from './strategies/jwt.strategy';
@@ -142,5 +144,21 @@ export class AuthController {
       throw new NotFoundException('User not found');
     }
     return UserResponseDto.fromEntity(user);
+  }
+
+  @Patch('me')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Update physical biometrics and goals of current user' })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'User profile updated successfully',
+    type: UserResponseDto,
+  })
+  async updateProfile(
+    @CurrentUser() currentUser: AuthenticatedUser,
+    @Body() dto: UpdateBiometricsDto,
+  ): Promise<UserResponseDto> {
+    return this.authService.updateBiometrics(currentUser.userId, dto);
   }
 }

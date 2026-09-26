@@ -88,6 +88,21 @@ export class PlanService {
   }
 
   /**
+   * POST /plan/regenerate: Force recalculation of weekly plan for the given week.
+   */
+  async regenerateWeeklyPlan(
+    userId: string,
+    weekStartDateInput?: string,
+  ): Promise<WeeklyPlanResponseDto> {
+    const monday = parseWeekStartDate(weekStartDateInput);
+    const generated = await this.recommendationService.generateWeeklyPlan(
+      userId,
+      monday,
+    );
+    return WeeklyPlanResponseDto.fromEntityWithDays(generated);
+  }
+
+  /**
    * Internal helper: Finds existing plan for the given Monday or provisions one
    * via RecommendationService based on the user's onboarding profile and equipment preferences.
    */
@@ -100,6 +115,19 @@ export class PlanService {
       monday,
     );
     if (existing) {
+      // Check if existing plan was generated when the program only had 1 workout, but now has multiple workouts
+      const activeDays = existing.days.filter((d) => !d.isRestDay && d.workoutId);
+      const uniqueWorkoutIds = new Set(activeDays.map((d) => d.workoutId));
+      if (activeDays.length > 1 && uniqueWorkoutIds.size === 1) {
+        this.logger.log(
+          `User ${userId} week ${monday.toISOString().slice(0, 10)} has repeating workout. Refreshing plan with updated program workouts.`,
+        );
+        const refreshed = await this.recommendationService.generateWeeklyPlan(
+          userId,
+          monday,
+        );
+        return WeeklyPlanResponseDto.fromEntityWithDays(refreshed);
+      }
       return WeeklyPlanResponseDto.fromEntityWithDays(existing);
     }
 

@@ -1,11 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Meal, MealEntry, MealType, Prisma } from '@prisma/client';
+import { GoalType, Meal, MealEntry, MealType, Prisma } from '@prisma/client';
 import {
   CreateMealDto,
   CreateMealEntryDto,
+  DailyNutritionPlanResponseDto,
   MealEntryResponseDto,
   MealMacrosDto,
   MealResponseDto,
+  NutritionTargetsResponseDto,
   TodaySummaryResponseDto,
   UpdateMealDto,
 } from './dto';
@@ -159,6 +161,152 @@ export class NutritionService {
     return {
       totalKcal,
       entries: entries.map((entry) => this.toMealEntryResponseDto(entry)),
+    };
+  }
+
+  async calculateTargets(
+    userId: string,
+    date: Date = new Date(),
+  ): Promise<NutritionTargetsResponseDto> {
+    const user = await this.nutritionRepository.findUserBiometrics(userId);
+    if (!user) {
+      throw new NotFoundException(`User with ID '${userId}' not found`);
+    }
+
+    const latestWeight =
+      user.weightEntries?.[0]?.weightKg ??
+      user.onboardingProfile?.currentWeightKg ??
+      75.0;
+
+    const heightCm = user.heightCm ?? user.onboardingProfile?.heightCm ?? 175.0;
+    const gender = (user.gender ?? user.onboardingProfile?.gender ?? 'MALE') as string;
+    const goalType = (user.goalType ?? user.onboardingProfile?.goal ?? GoalType.LOSE_WEIGHT) as GoalType;
+
+    const birthDate = user.birthDate ?? user.onboardingProfile?.birthDate;
+    let age = 28;
+    if (birthDate) {
+      const now = new Date();
+      age = now.getUTCFullYear() - new Date(birthDate).getUTCFullYear();
+    }
+
+    // 1. BMR (Mifflin-St Jeor)
+    let bmr = 10 * latestWeight + 6.25 * heightCm - 5 * age;
+    if (gender === 'FEMALE') {
+      bmr -= 161;
+    } else {
+      bmr += 5;
+    }
+    bmr = Math.round(bmr);
+
+    // 2. TDEE
+    const daysPerWeek = user.onboardingProfile?.workoutDaysPerWeek ?? 4;
+    let activityMultiplier = 1.45;
+    if (daysPerWeek <= 2) activityMultiplier = 1.30;
+    else if (daysPerWeek >= 5) activityMultiplier = 1.60;
+    const tdee = Math.round(bmr * activityMultiplier);
+
+    // 3. Goal adjustment
+    let targetKcal = tdee;
+    let proteinPerKg = 1.8;
+
+    if (goalType === GoalType.LOSE_WEIGHT) {
+      targetKcal = Math.round(tdee * 0.80); // 20% deficit
+      proteinPerKg = 2.1;
+      const minFloor = gender === 'FEMALE' ? 1200 : 1500;
+      targetKcal = Math.max(minFloor, targetKcal);
+    } else if (goalType === GoalType.GAIN_MUSCLE) {
+      targetKcal = Math.round(tdee * 1.10); // 10% clean surplus
+      proteinPerKg = 2.0;
+    } else {
+      targetKcal = Math.round(tdee);
+      proteinPerKg = 1.6;
+    }
+
+    // 4. Macro breakdown
+    const proteinGrams = Math.round(latestWeight * proteinPerKg);
+    const fatGrams = Math.round((targetKcal * 0.25) / 9); // 25% fats
+    let carbsGrams = Math.round((targetKcal - (proteinGrams * 4 + fatGrams * 9)) / 4);
+    carbsGrams = Math.max(50, carbsGrams);
+
+    // 5. Training Day Nutritional Cycling
+    const isTrainingDay = await this.nutritionRepository.isDateTrainingDay(userId, date);
+    let waterLiters = Math.round((latestWeight * 0.035) * 10) / 10;
+
+    if (isTrainingDay) {
+      const extraCarbs = Math.round(carbsGrams * 0.10);
+      carbsGrams += extraCarbs;
+      targetKcal += extraCarbs * 4;
+      waterLiters = Math.round((waterLiters + 0.6) * 10) / 10;
+    }
+
+    return {
+      bmr,
+      tdee,
+      targetKcal,
+      proteinGrams,
+      carbsGrams,
+      fatGrams,
+      waterLiters,
+      isTrainingDay,
+      goalType,
+    };
+  }
+
+  async getDailyNutritionPlan(
+    userId: string,
+    dateString: string,
+  ): Promise<DailyNutritionPlanResponseDto> {
+    const rawDate = new Date(dateString);
+    const date = new Date(
+      Date.UTC(
+        rawDate.getUTCFullYear(),
+        rawDate.getUTCMonth(),
+        rawDate.getUTCDate(),
+      ),
+    );
+
+    // 1. Calculate targets for this specific date
+    const targets = await this.calculateTargets(userId, date);
+
+    // 2. Fetch logged entries for this date
+    const startOfDay = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0),
+    );
+    const endOfDay = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999),
+    );
+
+    const loggedEntries = await this.nutritionRepository.findMealEntriesByDate(
+      userId,
+      startOfDay,
+      endOfDay,
+    );
+
+    const consumedEntries = loggedEntries.filter((e) => e.consumed);
+    const consumedKcal = consumedEntries.reduce((sum, e) => sum + e.meal.kcal, 0);
+
+    const consumedMacros = consumedEntries.reduce(
+      (acc, e) => {
+        const m = e.meal.macros as unknown as MealMacrosDto;
+        return {
+          protein: acc.protein + Number(m?.protein ?? 0),
+          carbs: acc.carbs + Number(m?.carbs ?? 0),
+          fat: acc.fat + Number(m?.fat ?? 0),
+        };
+      },
+      { protein: 0, carbs: 0, fat: 0 },
+    );
+
+    // 3. Recommended meals: fetch catalog meals
+    const catalogMeals = await this.nutritionRepository.findMeals();
+
+    return {
+      date: date.toISOString(),
+      targets,
+      recommendedMeals: catalogMeals.map((m) => this.toMealResponseDto(m)),
+      loggedEntries: loggedEntries.map((e) => this.toMealEntryResponseDto(e)),
+      consumedKcal,
+      consumedMacros,
     };
   }
 

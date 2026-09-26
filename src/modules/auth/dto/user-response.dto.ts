@@ -48,6 +48,48 @@ export class UserResponseDto {
   })
   role: UserRole;
 
+  @ApiPropertyOptional({
+    example: '11111111-1111-4111-8111-111111111111',
+    description: 'Enrolled program UUID',
+    nullable: true,
+  })
+  currentProgramId?: string | null;
+
+  @ApiPropertyOptional({
+    example: '2026-09-21T00:00:00.000Z',
+    description: 'Date when user started current program in ISO 8601 UTC format',
+    nullable: true,
+  })
+  programStartDate?: string | null;
+
+  @ApiPropertyOptional({
+    example: 'MALE',
+    description: 'Biological gender for metabolic calculations',
+    nullable: true,
+  })
+  gender?: string | null;
+
+  @ApiPropertyOptional({
+    example: '1995-05-15T00:00:00.000Z',
+    description: 'Birth date in ISO format',
+    nullable: true,
+  })
+  birthDate?: string | null;
+
+  @ApiPropertyOptional({
+    example: 175.5,
+    description: 'Height in cm',
+    nullable: true,
+  })
+  heightCm?: number | null;
+
+  @ApiPropertyOptional({
+    example: 75.0,
+    description: 'Target weight in kg',
+    nullable: true,
+  })
+  targetWeightKg?: number | null;
+
   static fromEntity(user: User): UserResponseDto {
     return {
       id: user.id,
@@ -57,6 +99,14 @@ export class UserResponseDto {
       goalType: user.goalType,
       joinDate: user.joinDate.toISOString(),
       role: user.role,
+      currentProgramId: user.currentProgramId,
+      programStartDate: user.programStartDate
+        ? user.programStartDate.toISOString()
+        : null,
+      gender: user.gender ?? null,
+      birthDate: user.birthDate ? user.birthDate.toISOString() : null,
+      heightCm: user.heightCm ?? null,
+      targetWeightKg: user.targetWeightKg ?? null,
     };
   }
 }

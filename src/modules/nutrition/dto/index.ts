@@ -7,3 +7,5 @@ export * from './create-meal-entry.dto';
 export * from './meal-entry-query.dto';
 export * from './meal-entry-response.dto';
 export * from './today-summary-response.dto';
+export * from './nutrition-targets-response.dto';
+export * from './daily-nutrition-plan-response.dto';

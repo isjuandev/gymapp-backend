@@ -38,6 +38,14 @@ enum UserRole {
   @@map("user_role")
 }
 
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+
+  @@map("gender")
+}
+
 enum ProgramCategory {
   WEIGHT_LOSS
   MUSCLE_GAIN
@@ -166,8 +174,15 @@ model User {
   goalType        GoalType? @map("goal_type")
   joinDate        DateTime  @default(now()) @map("join_date")
   role            UserRole  @default(MEMBER)
+  currentProgramId String?  @map("current_program_id")
+  programStartDate DateTime? @map("program_start_date")
+  gender           Gender?
+  birthDate        DateTime? @map("birth_date")
+  heightCm         Float?    @map("height_cm")
+  targetWeightKg   Float?    @map("target_weight_kg")
 
   // Relations
+  currentProgram           Program?                  @relation("UserCurrentProgram", fields: [currentProgramId], references: [id], onDelete: SetNull)
   workoutSessions          WorkoutSession[]
   weeklyPlans              WeeklyPlan[]
   weightEntries            WeightEntry[]
@@ -198,7 +213,9 @@ model Program {
   imageAssetName String          @map("image_asset_name")
 
   // Relations
-  workouts Workout[]
+  workouts      Workout[]
+  enrolledUsers User[]       @relation("UserCurrentProgram")
+  weeklyPlans   WeeklyPlan[]
 
   @@map("programs")
 }
@@ -335,6 +352,11 @@ model OnboardingProfile {
   goal               GoalType
   experienceLevel    ExperienceLevel @map("experience_level")
   workoutDaysPerWeek Int             @map("workout_days_per_week")
+  gender             Gender?
+  birthDate          DateTime?       @map("birth_date")
+  heightCm           Float?          @map("height_cm")
+  currentWeightKg    Float?          @map("current_weight_kg")
+  targetWeightKg     Float?          @map("target_weight_kg")
   completedAt        DateTime?       @map("completed_at")
 
   // Relations
@@ -406,13 +428,18 @@ model ExerciseProgressState {
 model WeeklyPlan {
   id            String   @id @default(uuid())
   userId        String   @map("user_id")
+  programId     String?  @map("program_id")
   weekStartDate DateTime @map("week_start_date")
+  weekNumber    Int      @default(1) @map("week_number")
+  totalWeeks    Int      @default(12) @map("total_weeks")
 
   // Relations
-  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  days PlanDay[]
+  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  program Program?  @relation(fields: [programId], references: [id], onDelete: SetNull)
+  days    PlanDay[]
 
   @@index([userId])
+  @@index([programId])
   @@map("weekly_plans")
 }
 

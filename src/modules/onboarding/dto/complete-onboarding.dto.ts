@@ -57,4 +57,41 @@ export class CompleteOnboardingDto {
     message: 'Each equipmentId must be a valid UUID v4',
   })
   equipmentIds: string[];
+
+  @ApiProperty({
+    enum: ['MALE', 'FEMALE', 'OTHER'],
+    required: false,
+    example: 'MALE',
+    description: 'Biological gender for nutritional/BMR calculations',
+  })
+  gender?: any;
+
+  @ApiProperty({
+    required: false,
+    example: '1995-05-15T00:00:00.000Z',
+    description: 'Birth date in ISO format',
+  })
+  birthDate?: string;
+
+  @ApiProperty({
+    required: false,
+    example: 178.0,
+    description: 'Height in cm',
+  })
+  heightCm?: number;
+
+  @ApiProperty({
+    required: false,
+    example: 82.5,
+    description: 'Current body weight in kg',
+  })
+  currentWeightKg?: number;
+
+  @ApiProperty({
+    required: false,
+    example: 75.0,
+    description: 'Target body weight in kg',
+  })
+  targetWeightKg?: number;
 }
+

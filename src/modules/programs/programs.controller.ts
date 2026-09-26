@@ -27,12 +27,39 @@ import { ProgramDetailResponseDto } from './dto/program-detail-response.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
+import { WeeklyPlanResponseDto } from '../plan/dto/weekly-plan-response.dto';
 
 @ApiTags('Programs')
 @Controller('programs')
 export class ProgramsController {
   constructor(private readonly programsService: ProgramsService) {}
+
+  @Post(':id/enroll')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Enroll current user into a program and generate active weekly plan',
+    description:
+      'Sets user currentProgramId, sets programStartDate to current week Monday, and regenerates current weekly plan.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'User successfully enrolled and weekly plan generated',
+    type: WeeklyPlanResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Program not found',
+  })
+  async enroll(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') userId: string,
+  ): Promise<WeeklyPlanResponseDto> {
+    return this.programsService.enrollInProgram(userId, id);
+  }
 
   @Get()
   @UseGuards(JwtAuthGuard)

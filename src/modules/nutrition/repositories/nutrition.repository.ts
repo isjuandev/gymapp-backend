@@ -122,4 +122,46 @@ export class NutritionRepository {
       },
     });
   }
+
+  async findUserBiometrics(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        onboardingProfile: true,
+        weightEntries: {
+          orderBy: { date: 'desc' },
+          take: 1,
+        },
+      },
+    });
+    return user;
+  }
+
+  async isDateTrainingDay(userId: string, date: Date): Promise<boolean> {
+    const startOfDay = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0),
+    );
+    const endOfDay = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999),
+    );
+
+    const planDay = await this.prisma.planDay.findFirst({
+      where: {
+        weeklyPlan: { userId },
+        date: {
+          gte: startOfDay,
+          lte: endOfDay,
+        },
+      },
+    });
+
+    if (planDay) {
+      return !planDay.isRestDay;
+    }
+
+    // Default heuristic: Mon, Wed, Fri are training days
+    const day = date.getUTCDay();
+    return day === 1 || day === 3 || day === 5;
+  }
 }
+

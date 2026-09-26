@@ -88,6 +88,7 @@ export const WORKOUT_DAY_DISTRIBUTION: Record<number, number[]> = {
 
 export type WeeklyPlanWithDaysAndWorkouts = WeeklyPlan & {
   days: (PlanDay & { workout?: Workout | null })[];
+  program?: Program | null;
 };
 
 @Injectable()
@@ -103,8 +104,9 @@ export class RecommendationService {
   async generateWeeklyPlan(
     userId: string,
     weekStartDate: Date,
+    overrideProgramId?: string,
   ): Promise<WeeklyPlanWithDaysAndWorkouts> {
-    // 1. Fetch user OnboardingProfile
+    // 1. Fetch user OnboardingProfile & user entity
     const profile = await this.prisma.onboardingProfile.findUnique({
       where: { userId },
     });
@@ -115,61 +117,66 @@ export class RecommendationService {
       );
     }
 
-    // 2. Map goal to ProgramCategory
-    const category = GOAL_TO_CATEGORY[profile.goal];
+    let user: any = null;
+    if (this.prisma.user?.findUnique) {
+      user = await this.prisma.user.findUnique({
+        where: { id: userId },
+      });
+    }
 
-    // 3. Find matching Programs by category and level (with fallback hierarchy)
-    const fallbackLevels = LEVEL_FALLBACK_ORDER[profile.experienceLevel];
+    // 2. Resolve Program to use: override -> active user program -> category match
+    const targetProgramId = overrideProgramId || user?.currentProgramId;
     let matchedPrograms: (Program & { workouts: Workout[] })[] = [];
 
-    for (const level of fallbackLevels) {
-      const programs = await this.prisma.program.findMany({
-        where: {
-          category,
-          level,
-        },
+    if (targetProgramId) {
+      const specificProgram = await this.prisma.program.findUnique({
+        where: { id: targetProgramId },
         include: {
           workouts: {
             orderBy: { title: 'asc' },
           },
         },
-        orderBy: { title: 'asc' },
       });
 
-      if (programs.length > 0 && programs.some((p) => p.workouts.length > 0)) {
-        matchedPrograms = programs;
-        if (level !== fallbackLevels[0]) {
-          this.logger.warn(
-            `No programs found for category '${category}' with exact level '${fallbackLevels[0]}'. Applied fallback to level '${level}'.`,
-          );
-        }
-        break;
+      if (specificProgram && specificProgram.workouts.length > 0) {
+        matchedPrograms = [specificProgram];
       }
     }
 
-    // Fallback to any program in category if still empty
+    // If no specific program found, match by user goal category and experience level
     if (matchedPrograms.length === 0) {
-      const categoryPrograms = await this.prisma.program.findMany({
-        where: { category },
-        include: {
-          workouts: {
-            orderBy: { title: 'asc' },
-          },
-        },
-        orderBy: { title: 'asc' },
-      });
+      const category = GOAL_TO_CATEGORY[profile.goal];
+      const fallbackLevels = LEVEL_FALLBACK_ORDER[profile.experienceLevel];
 
-      if (
-        categoryPrograms.length > 0 &&
-        categoryPrograms.some((p) => p.workouts.length > 0)
-      ) {
-        matchedPrograms = categoryPrograms;
-        this.logger.warn(
-          `No programs found for category '${category}' at any requested level. Falling back to any available program in category.`,
-        );
-      } else {
-        // Fallback to any available program in database
-        const anyPrograms = await this.prisma.program.findMany({
+      for (const level of fallbackLevels) {
+        const programs = await this.prisma.program.findMany({
+          where: {
+            category,
+            level,
+          },
+          include: {
+            workouts: {
+              orderBy: { title: 'asc' },
+            },
+          },
+          orderBy: { title: 'asc' },
+        });
+
+        if (programs.length > 0 && programs.some((p) => p.workouts.length > 0)) {
+          matchedPrograms = programs;
+          if (level !== fallbackLevels[0]) {
+            this.logger.warn(
+              `No programs found for category '${category}' with exact level '${fallbackLevels[0]}'. Applied fallback to level '${level}'.`,
+            );
+          }
+          break;
+        }
+      }
+
+      // Fallback to any program in category if still empty
+      if (matchedPrograms.length === 0) {
+        const categoryPrograms = await this.prisma.program.findMany({
+          where: { category },
           include: {
             workouts: {
               orderBy: { title: 'asc' },
@@ -179,26 +186,58 @@ export class RecommendationService {
         });
 
         if (
-          anyPrograms.length > 0 &&
-          anyPrograms.some((p) => p.workouts.length > 0)
+          categoryPrograms.length > 0 &&
+          categoryPrograms.some((p) => p.workouts.length > 0)
         ) {
-          matchedPrograms = anyPrograms;
+          matchedPrograms = categoryPrograms;
           this.logger.warn(
-            `No programs found for category '${category}'. Falling back to any available program in database.`,
+            `No programs found for category '${category}' at any requested level. Falling back to any available program in category.`,
           );
         } else {
-          throw new NotFoundException(
-            `No available programs or workouts found to generate weekly plan for user '${userId}'.`,
-          );
+          // Fallback to any available program in database
+          const anyPrograms = await this.prisma.program.findMany({
+            include: {
+              workouts: {
+                orderBy: { title: 'asc' },
+              },
+            },
+            orderBy: { title: 'asc' },
+          });
+
+          if (
+            anyPrograms.length > 0 &&
+            anyPrograms.some((p) => p.workouts.length > 0)
+          ) {
+            matchedPrograms = anyPrograms;
+            this.logger.warn(
+              `No programs found for category '${category}'. Falling back to any available program in database.`,
+            );
+          } else {
+            throw new NotFoundException(
+              `No available programs or workouts found to generate weekly plan for user '${userId}'.`,
+            );
+          }
         }
       }
     }
 
+    const chosenProgram = matchedPrograms[0];
+
+    // 3. Compute week progression relative to programStartDate
+    const programStartDate = overrideProgramId
+      ? weekStartDate
+      : (user?.programStartDate ?? weekStartDate);
+
+    const diffMs = weekStartDate.getTime() - new Date(programStartDate).getTime();
+    const elapsedWeeks = Math.max(0, Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)));
+    const totalWeeks = chosenProgram.durationWeeks ?? 12;
+    const weekNumber = Math.max(1, Math.min(totalWeeks, elapsedWeeks + 1));
+
     // 4. Gather available workouts
-    const availableWorkouts = matchedPrograms.flatMap((p) => p.workouts);
+    const availableWorkouts = chosenProgram.workouts;
     if (availableWorkouts.length === 0) {
       throw new NotFoundException(
-        `No workouts found in matched programs to generate weekly plan for user '${userId}'.`,
+        `No workouts found in program '${chosenProgram.title}' to generate weekly plan for user '${userId}'.`,
       );
     }
 
@@ -241,8 +280,24 @@ export class RecommendationService {
       }
     }
 
-    // 7. Transactionally persist WeeklyPlan and PlanDays
+    // 7. Transactionally persist WeeklyPlan and PlanDays, and sync User program state
     return this.prisma.$transaction(async (tx) => {
+      // Sync user current program if newly assigned or overridden
+      if (
+        tx.user?.update &&
+        (overrideProgramId || !user?.currentProgramId || user.currentProgramId !== chosenProgram.id)
+      ) {
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            currentProgramId: chosenProgram.id,
+            programStartDate: overrideProgramId
+              ? weekStartDate
+              : (user?.programStartDate ?? weekStartDate),
+          },
+        });
+      }
+
       const existingPlan = await tx.weeklyPlan.findFirst({
         where: {
           userId,
@@ -263,11 +318,15 @@ export class RecommendationService {
         data: {
           userId,
           weekStartDate,
+          programId: chosenProgram.id,
+          weekNumber,
+          totalWeeks,
           days: {
             create: planDaysData,
           },
         },
         include: {
+          program: true,
           days: {
             include: {
               workout: true,

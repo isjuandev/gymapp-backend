@@ -48,6 +48,32 @@ export class AuthRepository {
     });
   }
 
+  async updateUserBiometrics(
+    id: string,
+    data: {
+      gender?: any;
+      birthDate?: Date;
+      heightCm?: number;
+      targetWeightKg?: number;
+      goalType?: any;
+    },
+  ): Promise<User> {
+    return this.prisma.user.update({
+      where: { id },
+      data,
+    });
+  }
+
+  async recordWeightEntry(userId: string, weightKg: number): Promise<void> {
+    await this.prisma.weightEntry.create({
+      data: {
+        userId,
+        date: new Date(),
+        weightKg,
+      },
+    });
+  }
+
   async createUser(data: CreateUserData): Promise<User> {
     return this.prisma.user.create({
       data: {

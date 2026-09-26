@@ -38,6 +38,8 @@ describe('NutritionService', () => {
       deleteMeal: jest.fn(),
       upsertMealEntry: jest.fn(),
       findMealEntriesByDate: jest.fn(),
+      findUserBiometrics: jest.fn(),
+      isDateTrainingDay: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -219,4 +221,52 @@ describe('NutritionService', () => {
       expect(result.entries).toHaveLength(2);
     });
   });
+
+  describe('calculateTargets', () => {
+    it('should calculate BMR and target macros adjusted for goal and training day', async () => {
+      repository.findUserBiometrics.mockResolvedValue({
+        id: userId,
+        gender: 'MALE',
+        birthDate: new Date('1996-01-01T00:00:00.000Z'),
+        heightCm: 180,
+        goalType: 'LOSE_WEIGHT',
+        weightEntries: [{ weightKg: 80, date: new Date() } as any],
+        onboardingProfile: { workoutDaysPerWeek: 4 } as any,
+      } as any);
+
+      repository.isDateTrainingDay.mockResolvedValue(true);
+
+      const targets = await service.calculateTargets(userId, new Date('2026-09-24'));
+
+      expect(targets.bmr).toBeGreaterThan(1600);
+      expect(targets.tdee).toBeGreaterThan(targets.bmr);
+      expect(targets.isTrainingDay).toBe(true);
+      expect(targets.proteinGrams).toBeGreaterThan(140);
+      expect(targets.waterLiters).toBeGreaterThan(2.0);
+    });
+  });
+
+  describe('getDailyNutritionPlan', () => {
+    it('should return complete daily plan with targets, recommended meals and logged entries', async () => {
+      repository.findUserBiometrics.mockResolvedValue({
+        id: userId,
+        gender: 'MALE',
+        heightCm: 175,
+        goalType: 'GAIN_MUSCLE',
+        weightEntries: [{ weightKg: 75, date: new Date() } as any],
+      } as any);
+      repository.isDateTrainingDay.mockResolvedValue(false);
+      repository.findMealEntriesByDate.mockResolvedValue([mockEntry]);
+      repository.findMeals.mockResolvedValue([mockMeal]);
+
+      const plan = await service.getDailyNutritionPlan(userId, '2026-09-24');
+
+      expect(plan.targets.targetKcal).toBeGreaterThan(1500);
+      expect(plan.recommendedMeals).toHaveLength(1);
+      expect(plan.loggedEntries).toHaveLength(1);
+      expect(plan.consumedKcal).toBe(350);
+      expect(plan.consumedMacros.protein).toBe(25);
+    });
+  });
 });
+

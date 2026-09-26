@@ -3,6 +3,7 @@ import {
   ConflictException,
   UnauthorizedException,
   BadRequestException,
+  NotFoundException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -16,6 +17,7 @@ import { AppleLoginDto } from './dto/apple-login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { UpdateBiometricsDto } from './dto/update-biometrics.dto';
 import { AppleTokenVerifier } from './apple-token-verifier.service';
 import { User, UserRole } from '@prisma/client';
 
@@ -204,6 +206,32 @@ export class AuthService {
     }
 
     return { message: 'Logged out successfully' };
+  }
+
+  async updateBiometrics(
+    userId: string,
+    dto: UpdateBiometricsDto,
+  ): Promise<UserResponseDto> {
+    const user = await this.authRepository.findUserById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const birthDate = dto.birthDate ? new Date(dto.birthDate) : undefined;
+
+    const updated = await this.authRepository.updateUserBiometrics(userId, {
+      gender: dto.gender,
+      birthDate,
+      heightCm: dto.heightCm,
+      targetWeightKg: dto.targetWeightKg,
+      goalType: dto.goalType,
+    });
+
+    if (dto.currentWeightKg) {
+      await this.authRepository.recordWeightEntry(userId, dto.currentWeightKg);
+    }
+
+    return UserResponseDto.fromEntity(updated);
   }
 
   private async generateTokens(

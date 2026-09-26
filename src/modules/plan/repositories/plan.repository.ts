@@ -1,10 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { PlanDay, PlanDayStatus, WeeklyPlan, Workout } from '@prisma/client';
+import { PlanDay, PlanDayStatus, Program, WeeklyPlan, Workout } from '@prisma/client';
 import { UpdatePlanDayDto } from '../dto/update-plan-day.dto';
 
 export type WeeklyPlanWithDaysAndWorkout = WeeklyPlan & {
   days: (PlanDay & { workout: Workout | null })[];
+  program?: Program | null;
 };
 
 export type PlanDayWithPlanAndWorkout = PlanDay & {
@@ -33,6 +34,7 @@ export class PlanRepository {
         weekStartDate,
       },
       include: {
+        program: true,
         days: {
           include: {
             workout: true,
@@ -60,6 +62,7 @@ export class PlanRepository {
         weekStartDate: 'desc',
       },
       include: {
+        program: true,
         days: {
           include: {
             workout: true,
@@ -76,11 +79,19 @@ export class PlanRepository {
     userId: string,
     weekStartDate: Date,
     daysData: PlanDayCreationData[],
+    metadata?: {
+      programId?: string | null;
+      weekNumber?: number;
+      totalWeeks?: number;
+    },
   ): Promise<WeeklyPlanWithDaysAndWorkout> {
     return this.prisma.weeklyPlan.create({
       data: {
         userId,
         weekStartDate,
+        programId: metadata?.programId,
+        weekNumber: metadata?.weekNumber ?? 1,
+        totalWeeks: metadata?.totalWeeks ?? 12,
         days: {
           create: daysData.map((d) => ({
             date: d.date,
@@ -91,6 +102,7 @@ export class PlanRepository {
         },
       },
       include: {
+        program: true,
         days: {
           include: {
             workout: true,

@@ -28,6 +28,8 @@ import {
   MealResponseDto,
   TodaySummaryResponseDto,
   UpdateMealDto,
+  NutritionTargetsResponseDto,
+  DailyNutritionPlanResponseDto,
 } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -211,4 +213,47 @@ export class NutritionController {
   ): Promise<MealEntryResponseDto> {
     return this.nutritionService.upsertMealEntry(userId, dto);
   }
+
+  // ============================================================================
+  // NUTRITION TARGETS & DAILY RECOMMENDATIONS
+  // ============================================================================
+
+  @Get('targets')
+  @ApiOperation({
+    summary: 'Get calculated nutritional targets for current user',
+    description:
+      'Calculates BMR, TDEE, targetKcal, macros and water based on user biometrics and day type.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Nutritional targets',
+    type: NutritionTargetsResponseDto,
+  })
+  async getNutritionTargets(
+    @CurrentUser('userId') userId: string,
+    @Query('date') dateString?: string,
+  ): Promise<NutritionTargetsResponseDto> {
+    const date = dateString ? new Date(dateString) : new Date();
+    return this.nutritionService.calculateTargets(userId, date);
+  }
+
+  @Get('daily-plan')
+  @ApiOperation({
+    summary: 'Get complete daily nutrition plan combining targets, recommended meals and consumed macros',
+    description:
+      'Powers the daily Nutrition view and Full Meal Plan view in iOS with calculated targets and meals.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Daily nutrition plan',
+    type: DailyNutritionPlanResponseDto,
+  })
+  async getDailyNutritionPlan(
+    @CurrentUser('userId') userId: string,
+    @Query('date') dateString?: string,
+  ): Promise<DailyNutritionPlanResponseDto> {
+    const date = dateString || new Date().toISOString();
+    return this.nutritionService.getDailyNutritionPlan(userId, date);
+  }
 }
+

@@ -36,7 +36,9 @@ export class CatalogService implements OnApplicationBootstrap {
     try {
       const catalogCount = await this.prisma.exerciseCatalog.count();
       const programCount = await this.prisma.program.count();
-      if (catalogCount < BASE_CATALOG.length || programCount < BASE_PROGRAMS.length) {
+      const workoutCount = await this.prisma.workout.count();
+      const totalBaseWorkouts = BASE_PROGRAMS.reduce((acc, p) => acc + p.workouts.length, 0);
+      if (catalogCount < BASE_CATALOG.length || programCount < BASE_PROGRAMS.length || workoutCount < totalBaseWorkouts) {
         this.logger.log('Seeding base equipment, exercise catalog and programs...');
 
         // 1. Seed equipment

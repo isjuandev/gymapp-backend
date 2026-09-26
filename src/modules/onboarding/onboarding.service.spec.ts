@@ -5,6 +5,7 @@ import { OnboardingRepository } from './repositories/onboarding.repository';
 import { EquipmentRepository } from '../equipment/repositories/equipment.repository';
 import { RecommendationService } from '../recommendation/recommendation.service';
 import { ExperienceLevel, GoalType } from '@prisma/client';
+import { PrismaService } from '../../prisma/prisma.service';
 
 describe('OnboardingService', () => {
   let service: OnboardingService;
@@ -40,12 +41,19 @@ describe('OnboardingService', () => {
       resolveExerciseForUser: jest.fn(),
     };
 
+    const mockPrismaService = {
+      user: { update: jest.fn().mockResolvedValue({} as any) },
+      weightEntry: { create: jest.fn().mockResolvedValue({} as any) },
+      goal: { create: jest.fn().mockResolvedValue({} as any) },
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OnboardingService,
         { provide: OnboardingRepository, useValue: mockOnboardingRepo },
         { provide: EquipmentRepository, useValue: mockEquipmentRepo },
         { provide: RecommendationService, useValue: mockRecommendationService },
+        { provide: PrismaService, useValue: mockPrismaService },
       ],
     }).compile();
 

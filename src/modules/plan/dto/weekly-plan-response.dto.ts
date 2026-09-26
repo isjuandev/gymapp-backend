@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { PlanDay, WeeklyPlan, Workout } from '@prisma/client';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PlanDay, Program, WeeklyPlan, Workout } from '@prisma/client';
 import { PlanDayResponseDto } from './plan-day-response.dto';
 
 export class WeeklyPlanResponseDto {
@@ -22,6 +22,32 @@ export class WeeklyPlanResponseDto {
   weekStartDate: string;
 
   @ApiProperty({
+    example: 1,
+    description: 'Current week number relative to program start',
+  })
+  currentWeekNumber: number;
+
+  @ApiProperty({
+    example: 12,
+    description: 'Total number of weeks in the program',
+  })
+  totalWeeks: number;
+
+  @ApiPropertyOptional({
+    example: '11111111-1111-4111-8111-111111111111',
+    description: 'Associated Program UUID',
+    nullable: true,
+  })
+  programId?: string | null;
+
+  @ApiPropertyOptional({
+    example: 'Hipertrofia Total',
+    description: 'Associated Program title',
+    nullable: true,
+  })
+  programTitle?: string | null;
+
+  @ApiProperty({
     type: () => [PlanDayResponseDto],
     description:
       '7 days of the week (Monday through Sunday) with assigned workouts',
@@ -31,12 +57,17 @@ export class WeeklyPlanResponseDto {
   static fromEntityWithDays(
     plan: WeeklyPlan & {
       days: (PlanDay & { workout?: Workout | null })[];
+      program?: Program | null;
     },
   ): WeeklyPlanResponseDto {
     return {
       id: plan.id,
       userId: plan.userId,
       weekStartDate: plan.weekStartDate.toISOString(),
+      currentWeekNumber: plan.weekNumber ?? 1,
+      totalWeeks: plan.totalWeeks ?? 12,
+      programId: plan.programId ?? null,
+      programTitle: plan.program?.title ?? null,
       days: (plan.days || [])
         .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
         .map((d) => PlanDayResponseDto.fromEntity(d)),

@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Post,
   Patch,
   Param,
   Body,
@@ -63,6 +64,24 @@ export class PlanController {
     @Query() query: PlanQueryDto,
   ): Promise<WeeklyPlanResponseDto> {
     return this.planService.getPlanByWeek(userId, query.weekStartDate);
+  }
+
+  @Post('regenerate')
+  @ApiOperation({
+    summary: 'Force regenerate weekly plan for current week or specified week',
+    description:
+      'Recalculates workout rotation and distribution based on current program and profile.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Regenerated weekly plan with varied workouts',
+    type: WeeklyPlanResponseDto,
+  })
+  async regenerate(
+    @CurrentUser('userId') userId: string,
+    @Query() query: PlanQueryDto,
+  ): Promise<WeeklyPlanResponseDto> {
+    return this.planService.regenerateWeeklyPlan(userId, query.weekStartDate);
   }
 
   @Patch('days/:planDayId')

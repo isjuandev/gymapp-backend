@@ -7,6 +7,11 @@ export interface UpsertOnboardingData {
   experienceLevel: ExperienceLevel;
   workoutDaysPerWeek: number;
   completedAt: Date;
+  gender?: any;
+  birthDate?: Date;
+  heightCm?: number;
+  currentWeightKg?: number;
+  targetWeightKg?: number;
 }
 
 @Injectable()
@@ -30,6 +35,11 @@ export class OnboardingRepository {
         experienceLevel: data.experienceLevel,
         workoutDaysPerWeek: data.workoutDaysPerWeek,
         completedAt: data.completedAt,
+        gender: data.gender,
+        birthDate: data.birthDate,
+        heightCm: data.heightCm,
+        currentWeightKg: data.currentWeightKg,
+        targetWeightKg: data.targetWeightKg,
       },
       create: {
         userId,
@@ -37,6 +47,11 @@ export class OnboardingRepository {
         experienceLevel: data.experienceLevel,
         workoutDaysPerWeek: data.workoutDaysPerWeek,
         completedAt: data.completedAt,
+        gender: data.gender,
+        birthDate: data.birthDate,
+        heightCm: data.heightCm,
+        currentWeightKg: data.currentWeightKg,
+        targetWeightKg: data.targetWeightKg,
       },
     });
   }

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { ProgramsService } from './programs.service';
 import { ProgramsRepository } from './repositories/programs.repository';
+import { RecommendationService } from '../recommendation/recommendation.service';
 import {
   Program,
   ProgramCategory,
@@ -36,6 +37,8 @@ describe('ProgramsService', () => {
     rounds: 4,
   };
 
+  let mockRecommendationService: any;
+
   beforeEach(async () => {
     const mockRepo = {
       findAll: jest.fn(),
@@ -46,10 +49,15 @@ describe('ProgramsService', () => {
       delete: jest.fn(),
     };
 
+    mockRecommendationService = {
+      generateWeeklyPlan: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProgramsService,
         { provide: ProgramsRepository, useValue: mockRepo },
+        { provide: RecommendationService, useValue: mockRecommendationService },
       ],
     }).compile();
 
@@ -157,6 +165,39 @@ describe('ProgramsService', () => {
       await expect(service.deleteProgram('non-existent')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('enrollInProgram', () => {
+    it('should enroll user and return generated weekly plan', async () => {
+      repository.findById.mockResolvedValue(mockProgram);
+      const mockWeeklyPlan = {
+        id: 'plan-1',
+        userId: 'user-1',
+        weekStartDate: new Date('2026-09-21'),
+        weekNumber: 1,
+        totalWeeks: 8,
+        programId: mockProgram.id,
+        program: mockProgram,
+        days: [],
+      };
+      mockRecommendationService.generateWeeklyPlan.mockResolvedValue(mockWeeklyPlan);
+
+      const result = await service.enrollInProgram('user-1', mockProgram.id);
+
+      expect(repository.findById).toHaveBeenCalledWith(mockProgram.id);
+      expect(mockRecommendationService.generateWeeklyPlan).toHaveBeenCalled();
+      expect(result.currentWeekNumber).toBe(1);
+      expect(result.totalWeeks).toBe(8);
+      expect(result.programId).toBe(mockProgram.id);
+    });
+
+    it('should throw NotFoundException when enrolling in non-existent program', async () => {
+      repository.findById.mockResolvedValue(null);
+
+      await expect(
+        service.enrollInProgram('user-1', 'non-existent'),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

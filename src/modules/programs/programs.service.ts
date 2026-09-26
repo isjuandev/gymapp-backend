@@ -5,10 +5,16 @@ import { CreateProgramDto } from './dto/create-program.dto';
 import { UpdateProgramDto } from './dto/update-program.dto';
 import { ProgramResponseDto } from './dto/program-response.dto';
 import { ProgramDetailResponseDto } from './dto/program-detail-response.dto';
+import { RecommendationService } from '../recommendation/recommendation.service';
+import { WeeklyPlanResponseDto } from '../plan/dto/weekly-plan-response.dto';
+import { getMondayOfWeek } from '../plan/utils/date.utils';
 
 @Injectable()
 export class ProgramsService {
-  constructor(private readonly programsRepository: ProgramsRepository) {}
+  constructor(
+    private readonly programsRepository: ProgramsRepository,
+    private readonly recommendationService: RecommendationService,
+  ) {}
 
   async getAllPrograms(
     filter?: ProgramFilterDto,
@@ -25,6 +31,25 @@ export class ProgramsService {
       throw new NotFoundException(`Program with ID '${id}' not found`);
     }
     return ProgramDetailResponseDto.fromEntityWithWorkouts(program);
+  }
+
+  async enrollInProgram(
+    userId: string,
+    programId: string,
+  ): Promise<WeeklyPlanResponseDto> {
+    const program = await this.programsRepository.findById(programId);
+    if (!program) {
+      throw new NotFoundException(`Program with ID '${programId}' not found`);
+    }
+
+    const monday = getMondayOfWeek(new Date());
+    const weeklyPlan = await this.recommendationService.generateWeeklyPlan(
+      userId,
+      monday,
+      programId,
+    );
+
+    return WeeklyPlanResponseDto.fromEntityWithDays(weeklyPlan);
   }
 
   async createProgram(dto: CreateProgramDto): Promise<ProgramResponseDto> {
