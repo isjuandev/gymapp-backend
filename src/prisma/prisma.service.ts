@@ -26,28 +26,32 @@ export class PrismaService
   }
 
   private async ensureSchemaColumns() {
-    try {
-      await this.$executeRawUnsafe(`
-        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "current_program_id" TEXT;
-        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "program_start_date" TIMESTAMP(3);
-        DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'gender') THEN CREATE TYPE "gender" AS ENUM ('MALE', 'FEMALE', 'OTHER'); END IF; END $$;
-        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "gender" "gender";
-        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "birth_date" TIMESTAMP(3);
-        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "height_cm" DOUBLE PRECISION;
-        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "target_weight_kg" DOUBLE PRECISION;
-        ALTER TABLE "weekly_plans" ADD COLUMN IF NOT EXISTS "program_id" TEXT;
-        ALTER TABLE "weekly_plans" ADD COLUMN IF NOT EXISTS "week_number" INTEGER NOT NULL DEFAULT 1;
-        ALTER TABLE "weekly_plans" ADD COLUMN IF NOT EXISTS "total_weeks" INTEGER NOT NULL DEFAULT 12;
-        ALTER TABLE "onboarding_profiles" ADD COLUMN IF NOT EXISTS "gender" "gender";
-        ALTER TABLE "onboarding_profiles" ADD COLUMN IF NOT EXISTS "birth_date" TIMESTAMP(3);
-        ALTER TABLE "onboarding_profiles" ADD COLUMN IF NOT EXISTS "height_cm" DOUBLE PRECISION;
-        ALTER TABLE "onboarding_profiles" ADD COLUMN IF NOT EXISTS "current_weight_kg" DOUBLE PRECISION;
-        ALTER TABLE "onboarding_profiles" ADD COLUMN IF NOT EXISTS "target_weight_kg" DOUBLE PRECISION;
-      `);
-      this.logger.log('Verified database schema columns.');
-    } catch (err) {
-      this.logger.warn(`ensureSchemaColumns: ${(err as Error).message}`);
+    const statements = [
+      'ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "current_program_id" TEXT',
+      'ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "program_start_date" TIMESTAMP(3)',
+      `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'gender') THEN CREATE TYPE "gender" AS ENUM ('MALE', 'FEMALE', 'OTHER'); END IF; END $$`,
+      'ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "gender" "gender"',
+      'ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "birth_date" TIMESTAMP(3)',
+      'ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "height_cm" DOUBLE PRECISION',
+      'ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "target_weight_kg" DOUBLE PRECISION',
+      'ALTER TABLE "weekly_plans" ADD COLUMN IF NOT EXISTS "program_id" TEXT',
+      'ALTER TABLE "weekly_plans" ADD COLUMN IF NOT EXISTS "week_number" INTEGER NOT NULL DEFAULT 1',
+      'ALTER TABLE "weekly_plans" ADD COLUMN IF NOT EXISTS "total_weeks" INTEGER NOT NULL DEFAULT 12',
+      'ALTER TABLE "onboarding_profiles" ADD COLUMN IF NOT EXISTS "gender" "gender"',
+      'ALTER TABLE "onboarding_profiles" ADD COLUMN IF NOT EXISTS "birth_date" TIMESTAMP(3)',
+      'ALTER TABLE "onboarding_profiles" ADD COLUMN IF NOT EXISTS "height_cm" DOUBLE PRECISION',
+      'ALTER TABLE "onboarding_profiles" ADD COLUMN IF NOT EXISTS "current_weight_kg" DOUBLE PRECISION',
+      'ALTER TABLE "onboarding_profiles" ADD COLUMN IF NOT EXISTS "target_weight_kg" DOUBLE PRECISION',
+    ];
+
+    for (const sql of statements) {
+      try {
+        await this.$executeRawUnsafe(sql);
+      } catch (err) {
+        this.logger.warn(`ensureSchemaColumns statement [${sql.slice(0, 30)}...]: ${(err as Error).message}`);
+      }
     }
+    this.logger.log('Verified database schema columns.');
   }
 
   async onModuleDestroy() {
