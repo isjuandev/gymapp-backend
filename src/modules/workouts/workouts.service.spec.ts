@@ -115,6 +115,7 @@ describe('WorkoutsService', () => {
       expect(recommendationService.resolveExerciseForUser).toHaveBeenCalledWith(
         mockExercise.id,
         'user-uuid-1111',
+        expect.any(Array),
       );
       expect(result.exercises).toHaveLength(1);
       expect(result.exercises[0].id).toBe('substitute-id-999');

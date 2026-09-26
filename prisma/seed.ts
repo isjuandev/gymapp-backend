@@ -78,7 +78,9 @@ async function main() {
 
   await prisma.exercise.upsert({
     where: { id: '33333333-3333-4333-8333-333333333331' },
-    update: {},
+    update: {
+      imageUrl: 'https://cdn.exercisedb.dev/media/w/images/A8OLBqBa26.jpg',
+    },
     create: {
       id: '33333333-3333-4333-8333-333333333331',
       workoutId: workout1.id,
@@ -86,12 +88,15 @@ async function main() {
       order: 1,
       kind: { type: 'reps', count: 10 },
       imageAssetName: 'ex_bench_press',
+      imageUrl: 'https://cdn.exercisedb.dev/media/w/images/A8OLBqBa26.jpg',
     },
   });
 
   await prisma.exercise.upsert({
     where: { id: '33333333-3333-4333-8333-333333333332' },
-    update: {},
+    update: {
+      imageUrl: 'https://cdn.exercisedb.dev/media/w/images/DhC4s2apCJ.jpg',
+    },
     create: {
       id: '33333333-3333-4333-8333-333333333332',
       workoutId: workout1.id,
@@ -99,12 +104,15 @@ async function main() {
       order: 2,
       kind: { type: 'reps', count: 12 },
       imageAssetName: 'ex_incline_dumbbell_fly',
+      imageUrl: 'https://cdn.exercisedb.dev/media/w/images/DhC4s2apCJ.jpg',
     },
   });
 
   await prisma.exercise.upsert({
     where: { id: '33333333-3333-4333-8333-333333333333' },
-    update: {},
+    update: {
+      imageUrl: 'https://cdn.exercisedb.dev/media/w/images/Ocsii6p15A.jpg',
+    },
     create: {
       id: '33333333-3333-4333-8333-333333333333',
       workoutId: workout1.id,
@@ -112,6 +120,7 @@ async function main() {
       order: 3,
       kind: { type: 'reps', count: 15 },
       imageAssetName: 'ex_tricep_pushdown',
+      imageUrl: 'https://cdn.exercisedb.dev/media/w/images/Ocsii6p15A.jpg',
     },
   });
 
@@ -132,7 +141,9 @@ async function main() {
 
   await prisma.exercise.upsert({
     where: { id: '33333333-3333-4333-8333-333333333334' },
-    update: {},
+    update: {
+      imageUrl: 'https://cdn.exercisedb.dev/media/w/images/QBL8IYGdYK.jpg',
+    },
     create: {
       id: '33333333-3333-4333-8333-333333333334',
       workoutId: workout2.id,
@@ -140,12 +151,15 @@ async function main() {
       order: 1,
       kind: { type: 'reps', count: 8 },
       imageAssetName: 'ex_back_squat',
+      imageUrl: 'https://cdn.exercisedb.dev/media/w/images/QBL8IYGdYK.jpg',
     },
   });
 
   await prisma.exercise.upsert({
     where: { id: '33333333-3333-4333-8333-333333333335' },
-    update: {},
+    update: {
+      imageUrl: 'https://cdn.exercisedb.dev/media/w/images/mgFlomC4R9.jpg',
+    },
     create: {
       id: '33333333-3333-4333-8333-333333333335',
       workoutId: workout2.id,
@@ -153,6 +167,7 @@ async function main() {
       order: 2,
       kind: { type: 'duration', seconds: 45 },
       imageAssetName: 'ex_plank',
+      imageUrl: 'https://cdn.exercisedb.dev/media/w/images/mgFlomC4R9.jpg',
     },
   });
 

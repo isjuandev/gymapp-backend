@@ -289,6 +289,7 @@ export class RecommendationService {
   async resolveExerciseForUser(
     exerciseId: string,
     userId: string,
+    excludedExerciseIds: string[] = [],
   ): Promise<ResolvedExercise> {
     const exercise = await this.prisma.exercise.findUnique({
       where: { id: exerciseId },
@@ -323,12 +324,12 @@ export class RecommendationService {
       });
 
       if (!userPref || !userPref.isSelected) {
-        // Search substitutes in same substitution group
+        // Search substitutes in same substitution group, excluding already present exercises
         if (exercise.substitutionGroupId) {
           const candidateSubstitutes = await this.prisma.exercise.findMany({
             where: {
               substitutionGroupId: exercise.substitutionGroupId,
-              id: { not: exercise.id },
+              id: { notIn: [exercise.id, ...excludedExerciseIds] },
             },
             include: {
               requiredEquipment: true,

@@ -33,16 +33,27 @@ export class WorkoutsService {
       return WorkoutDetailResponseDto.fromEntityWithExercises(workout);
     }
 
-    const resolvedExercises = await Promise.all(
-      workout.exercises.map(async (ex) => {
-        const resolved =
-          await this.recommendationService.resolveExerciseForUser(
-            ex.id,
-            userId,
-          );
-        return ExerciseResponseDto.fromResolved(resolved, workout.id);
-      }),
-    );
+    const existingExerciseIdsInWorkout = new Set(workout.exercises.map((e) => e.id));
+    const resolvedExercises: ExerciseResponseDto[] = [];
+    for (const ex of workout.exercises) {
+      const excludedIds = Array.from(existingExerciseIdsInWorkout).filter(
+        (id) => id !== ex.id,
+      );
+      for (const r of resolvedExercises) {
+        if (!excludedIds.includes(r.id)) {
+          excludedIds.push(r.id);
+        }
+      }
+      const resolved =
+        await this.recommendationService.resolveExerciseForUser(
+          ex.id,
+          userId,
+          excludedIds,
+        );
+      resolvedExercises.push(
+        ExerciseResponseDto.fromResolved(resolved, workout.id),
+      );
+    }
 
     const base = WorkoutResponseDto.fromEntity(workout);
     return {
