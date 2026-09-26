@@ -140,6 +140,18 @@ enum ExperienceLevel {
   @@map("experience_level")
 }
 
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+
+  @@map("day_of_week")
+}
+
 // ==============================================================================
 // MODELS
 // ==============================================================================
@@ -170,6 +182,7 @@ model User {
   onboardingProfile        OnboardingProfile?
   exerciseProgressStates   ExerciseProgressState[]
   customWorkouts           Workout[]
+  customRoutineDayAssignments CustomRoutineDayAssignment[]
 
   @@map("users")
 }
@@ -207,6 +220,7 @@ model Workout {
   exercises       Exercise[]
   workoutSessions WorkoutSession[]
   planDays        PlanDay[]
+  customRoutineDayAssignments CustomRoutineDayAssignment[]
 
   @@index([programId])
   @@index([ownerUserId])
@@ -566,4 +580,21 @@ model RefreshToken {
 
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+model CustomRoutineDayAssignment {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  dayOfWeek DayOfWeek @map("day_of_week")
+  workoutId String?   @map("workout_id")
+  isRestDay Boolean   @default(false) @map("is_rest_day")
+
+  // Relations
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workout Workout? @relation(fields: [workoutId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, dayOfWeek])
+  @@index([userId])
+  @@index([workoutId])
+  @@map("custom_routine_day_assignments")
 }

@@ -109,6 +109,17 @@ export class PrismaService
         `ALTER TABLE "workouts" ALTER COLUMN "image_asset_name" DROP NOT NULL;`,
         `ALTER TABLE "workouts" ALTER COLUMN "rounds" SET DEFAULT 1;`,
         `CREATE INDEX IF NOT EXISTS "workouts_owner_user_id_idx" ON "workouts"("owner_user_id");`,
+        `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'day_of_week') THEN CREATE TYPE "day_of_week" AS ENUM ('MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'); END IF; END $$;`,
+        `CREATE TABLE IF NOT EXISTS "custom_routine_day_assignments" (
+          "id" TEXT PRIMARY KEY,
+          "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "day_of_week" "day_of_week" NOT NULL,
+          "workout_id" TEXT REFERENCES "workouts"("id") ON DELETE SET NULL,
+          "is_rest_day" BOOLEAN NOT NULL DEFAULT false,
+          CONSTRAINT "custom_routine_day_assignments_user_id_day_of_week_key" UNIQUE ("user_id", "day_of_week")
+        );`,
+        `CREATE INDEX IF NOT EXISTS "custom_routine_day_assignments_user_id_idx" ON "custom_routine_day_assignments"("user_id");`,
+        `CREATE INDEX IF NOT EXISTS "custom_routine_day_assignments_workout_id_idx" ON "custom_routine_day_assignments"("workout_id");`,
       ];
 
       for (const statement of migrationStatements) {
