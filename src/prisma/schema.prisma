@@ -169,6 +169,7 @@ model User {
   userEquipmentPreferences UserEquipmentPreference[]
   onboardingProfile        OnboardingProfile?
   exerciseProgressStates   ExerciseProgressState[]
+  customWorkouts           Workout[]
 
   @@map("users")
 }
@@ -190,22 +191,25 @@ model Program {
 }
 
 model Workout {
-  id              String @id @default(uuid())
-  programId       String @map("program_id")
+  id              String   @id @default(uuid())
+  programId       String?  @map("program_id")
+  ownerUserId     String?  @map("owner_user_id")
   title           String
-  durationMinutes Int    @map("duration_minutes")
-  difficulty      String
-  kcalEstimate    Int    @map("kcal_estimate")
-  imageAssetName  String @map("image_asset_name")
-  rounds          Int
+  durationMinutes Int?     @map("duration_minutes")
+  difficulty      String?
+  kcalEstimate    Int?     @map("kcal_estimate")
+  imageAssetName  String?  @map("image_asset_name")
+  rounds          Int      @default(1)
 
   // Relations
-  program         Program          @relation(fields: [programId], references: [id], onDelete: Cascade)
+  program         Program?         @relation(fields: [programId], references: [id], onDelete: Cascade)
+  ownerUser       User?            @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
   exercises       Exercise[]
   workoutSessions WorkoutSession[]
   planDays        PlanDay[]
 
   @@index([programId])
+  @@index([ownerUserId])
   @@map("workouts")
 }
 

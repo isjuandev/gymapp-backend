@@ -1,9 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
+import { NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { WorkoutsService } from './workouts.service';
 import { WorkoutsRepository } from './repositories/workouts.repository';
 import { ProgramsRepository } from '../programs/repositories/programs.repository';
 import { RecommendationService } from '../recommendation/recommendation.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { Exercise, Workout, MuscleGroup } from '@prisma/client';
 
 describe('WorkoutsService', () => {
@@ -15,6 +16,7 @@ describe('WorkoutsService', () => {
   const mockWorkout: Workout = {
     id: '22222222-2222-2222-2222-222222222221',
     programId: '11111111-1111-1111-1111-111111111111',
+    ownerUserId: null,
     title: 'Pecho Power',
     durationMinutes: 45,
     difficulty: 'Intermedio',
@@ -54,12 +56,29 @@ describe('WorkoutsService', () => {
       resolveExerciseForUser: jest.fn(),
     };
 
+    const mockPrisma = {
+      exerciseCatalog: {
+        findMany: jest.fn(),
+        findUnique: jest.fn(),
+      },
+      workout: {
+        create: jest.fn(),
+        update: jest.fn(),
+      },
+      exercise: {
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+      },
+      $transaction: jest.fn((promises) => Promise.all(promises)),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         WorkoutsService,
         { provide: WorkoutsRepository, useValue: mockWorkoutsRepo },
         { provide: ProgramsRepository, useValue: mockProgramsRepo },
         { provide: RecommendationService, useValue: mockRecommendationService },
+        { provide: PrismaService, useValue: mockPrisma },
       ],
     }).compile();
 
@@ -211,6 +230,114 @@ describe('WorkoutsService', () => {
       await expect(service.deleteWorkout('non-existent')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('customWorkouts', () => {
+    const userId = 'user-test-uuid';
+    const customWorkoutMock: Workout = {
+      id: 'custom-workout-1',
+      programId: null,
+      ownerUserId: userId,
+      title: 'Mi Rutina Personalizada',
+      durationMinutes: 45,
+      difficulty: 'Personalizada',
+      kcalEstimate: 338,
+      imageAssetName: 'workout_card_default',
+      rounds: 1,
+    };
+
+    it('should create custom workout with catalog exercises and ownerUserId', async () => {
+      const mockCatalogItem = {
+        id: 'cat-ex-1',
+        name: 'Press de Banca',
+        nameEs: 'Press de Banca',
+        suggestedMinReps: 8,
+        suggestedMaxReps: 12,
+        defaultRestSeconds: 90,
+        equipmentId: 'eq-1',
+        videoUrl: 'https://cdn.exercisedb.dev/video.mp4',
+        imageUrl: 'https://cdn.exercisedb.dev/image.jpg',
+        instructions: ['Paso 1'],
+        primaryMuscleGroup: MuscleGroup.CHEST,
+      };
+
+      const mockPrisma = (service as any).prisma;
+      mockPrisma.exerciseCatalog.findMany.mockResolvedValue([mockCatalogItem]);
+      mockPrisma.workout.create.mockResolvedValue(customWorkoutMock);
+      workoutsRepo.findByIdWithExercises.mockResolvedValue({
+        ...customWorkoutMock,
+        exercises: [],
+      });
+
+      const result = await service.createCustomWorkout(userId, {
+        title: 'Mi Rutina Personalizada',
+        primaryMuscleGroup: MuscleGroup.CHEST,
+        exercises: [
+          {
+            exerciseId: 'cat-ex-1',
+            order: 1,
+            targetSets: 4,
+            targetReps: 10,
+          },
+        ],
+      });
+
+      expect(result.id).toBe(customWorkoutMock.id);
+      expect(result.isCustom).toBe(true);
+      expect(mockPrisma.workout.create).toHaveBeenCalled();
+    });
+
+    it('should throw BadRequestException if catalog exercise does not exist', async () => {
+      const mockPrisma = (service as any).prisma;
+      mockPrisma.exerciseCatalog.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.createCustomWorkout(userId, {
+          title: 'Rutina Invalida',
+          exercises: [{ exerciseId: 'invalid-id' }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should list custom workouts owned by user with isCustom true', async () => {
+      workoutsRepo.findByOwnerUserIdWithExercises = jest
+        .fn()
+        .mockResolvedValue([
+          {
+            ...customWorkoutMock,
+            exercises: [],
+          },
+        ]);
+
+      const result = await service.getCustomWorkouts(userId);
+      expect(result).toHaveLength(1);
+      expect(result[0].isCustom).toBe(true);
+      expect(result[0].id).toBe(customWorkoutMock.id);
+    });
+
+    it('should throw ForbiddenException when updating workout not owned by user', async () => {
+      workoutsRepo.findById.mockResolvedValue({
+        ...customWorkoutMock,
+        ownerUserId: 'different-user',
+      });
+
+      await expect(
+        service.updateCustomWorkout(customWorkoutMock.id, userId, {
+          title: 'Nuevo titulo',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should throw ForbiddenException when deleting workout not owned by user', async () => {
+      workoutsRepo.findById.mockResolvedValue({
+        ...customWorkoutMock,
+        ownerUserId: 'different-user',
+      });
+
+      await expect(
+        service.deleteCustomWorkout(customWorkoutMock.id, userId),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 });

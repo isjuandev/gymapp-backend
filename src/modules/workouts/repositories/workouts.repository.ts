@@ -40,13 +40,27 @@ export class WorkoutsRepository {
     });
   }
 
-  async create(data: CreateWorkoutDto): Promise<Workout> {
+  async findByOwnerUserIdWithExercises(
+    ownerUserId: string,
+  ): Promise<(Workout & { exercises: Exercise[] })[]> {
+    return this.prisma.workout.findMany({
+      where: { ownerUserId },
+      include: {
+        exercises: {
+          orderBy: { order: 'asc' },
+        },
+      },
+      orderBy: { title: 'asc' },
+    });
+  }
+
+  async create(data: any): Promise<Workout> {
     return this.prisma.workout.create({
       data,
     });
   }
 
-  async update(id: string, data: UpdateWorkoutDto): Promise<Workout> {
+  async update(id: string, data: any): Promise<Workout> {
     return this.prisma.workout.update({
       where: { id },
       data,

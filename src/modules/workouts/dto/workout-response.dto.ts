@@ -10,9 +10,25 @@ export class WorkoutResponseDto {
 
   @ApiProperty({
     example: '11111111-1111-1111-1111-111111111111',
-    description: 'Associated program UUID',
+    description: 'Associated program UUID (null for user custom workouts)',
+    required: false,
+    nullable: true,
   })
-  programId: string;
+  programId: string | null;
+
+  @ApiProperty({
+    example: 'user-uuid-here',
+    description: 'Owner user UUID (null for catalog workouts)',
+    required: false,
+    nullable: true,
+  })
+  ownerUserId?: string | null;
+
+  @ApiProperty({
+    example: false,
+    description: 'True if this is a user-created custom workout',
+  })
+  isCustom: boolean;
 
   @ApiProperty({
     example: 'Pecho & Tríceps Power',
@@ -23,26 +39,34 @@ export class WorkoutResponseDto {
   @ApiProperty({
     example: 50,
     description: 'Estimated duration in minutes',
+    required: false,
+    nullable: true,
   })
-  durationMinutes: number;
+  durationMinutes: number | null;
 
   @ApiProperty({
     example: 'Intermedio',
     description: 'Difficulty level description',
+    required: false,
+    nullable: true,
   })
-  difficulty: string;
+  difficulty: string | null;
 
   @ApiProperty({
     example: 420,
     description: 'Estimated calories burned',
+    required: false,
+    nullable: true,
   })
-  kcalEstimate: number;
+  kcalEstimate: number | null;
 
   @ApiProperty({
     example: 'workout_chest_triceps',
     description: 'Image asset name in the iOS bundle',
+    required: false,
+    nullable: true,
   })
-  imageAssetName: string;
+  imageAssetName: string | null;
 
   @ApiProperty({
     example: 4,
@@ -54,6 +78,8 @@ export class WorkoutResponseDto {
     return {
       id: workout.id,
       programId: workout.programId,
+      ownerUserId: workout.ownerUserId,
+      isCustom: !!workout.ownerUserId,
       title: workout.title,
       durationMinutes: workout.durationMinutes,
       difficulty: workout.difficulty,

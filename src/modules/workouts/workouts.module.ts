@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CustomWorkoutsController } from './custom-workouts.controller';
 import { WorkoutsController } from './workouts.controller';
 import { ExercisesController } from './exercises.controller';
 import { WorkoutsService } from './workouts.service';
@@ -11,7 +12,7 @@ import { RecommendationModule } from '../recommendation/recommendation.module';
 
 @Module({
   imports: [AuthModule, ProgramsModule, RecommendationModule],
-  controllers: [WorkoutsController, ExercisesController],
+  controllers: [CustomWorkoutsController, WorkoutsController, ExercisesController],
   providers: [
     WorkoutsService,
     ExercisesService,

@@ -101,6 +101,14 @@ export class PrismaService
         `CREATE INDEX IF NOT EXISTS "exercise_progress_states_user_id_idx" ON "exercise_progress_states"("user_id");`,
         `CREATE INDEX IF NOT EXISTS "exercise_progress_states_exercise_id_idx" ON "exercise_progress_states"("exercise_id");`,
         `ALTER TABLE "exercise_progress_states" ADD COLUMN IF NOT EXISTS "notes" TEXT;`,
+        `ALTER TABLE "workouts" ALTER COLUMN "program_id" DROP NOT NULL;`,
+        `ALTER TABLE "workouts" ADD COLUMN IF NOT EXISTS "owner_user_id" TEXT REFERENCES "users"("id") ON DELETE CASCADE;`,
+        `ALTER TABLE "workouts" ALTER COLUMN "duration_minutes" DROP NOT NULL;`,
+        `ALTER TABLE "workouts" ALTER COLUMN "difficulty" DROP NOT NULL;`,
+        `ALTER TABLE "workouts" ALTER COLUMN "kcal_estimate" DROP NOT NULL;`,
+        `ALTER TABLE "workouts" ALTER COLUMN "image_asset_name" DROP NOT NULL;`,
+        `ALTER TABLE "workouts" ALTER COLUMN "rounds" SET DEFAULT 1;`,
+        `CREATE INDEX IF NOT EXISTS "workouts_owner_user_id_idx" ON "workouts"("owner_user_id");`,
       ];
 
       for (const statement of migrationStatements) {
