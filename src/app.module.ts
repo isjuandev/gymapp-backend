@@ -18,6 +18,7 @@ import { RecommendationModule } from './modules/recommendation/recommendation.mo
 import { AscendApiModule } from './modules/ascend-api/ascend-api.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { CustomScheduleModule } from './modules/custom-schedule/custom-schedule.module';
+import { HomeModule } from './modules/home/home.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { CustomScheduleModule } from './modules/custom-schedule/custom-schedule.
     AscendApiModule,
     CatalogModule,
     CustomScheduleModule,
+    HomeModule,
   ],
   controllers: [AppController],
   providers: [AppService],
