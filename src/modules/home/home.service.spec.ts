@@ -11,6 +11,9 @@ describe('HomeService', () => {
     customRoutineDayAssignment: {
       findUnique: jest.Mock;
     };
+    workoutSession: {
+      findMany: jest.Mock;
+    };
   };
   let workoutsService: {
     getWorkoutById: jest.Mock;
@@ -25,6 +28,9 @@ describe('HomeService', () => {
     prisma = {
       customRoutineDayAssignment: {
         findUnique: jest.fn(),
+      },
+      workoutSession: {
+        findMany: jest.fn().mockResolvedValue([]),
       },
     };
 
@@ -256,6 +262,57 @@ describe('HomeService', () => {
 
       expect(result.source).toBe('recommended');
       expect(result.workout).toBe(mockFallbackWorkout);
+      expect(result.targetDay).toBe('today');
+      expect(result.isTodayCompleted).toBe(false);
+    });
+
+    it('should rotate to tomorrow workout when today workout session is already completed', async () => {
+      const todayInfo = service.resolveDayInTimezone('UTC');
+      const tomorrowInfo = service.resolveDayInTimezone(
+        'UTC',
+        new Date(Date.now() + 24 * 60 * 60 * 1000),
+      );
+
+      // Simulate a completed session today
+      prisma.workoutSession.findMany.mockResolvedValue([
+        {
+          id: 'session-completed-today',
+          userId,
+          status: 'COMPLETED',
+          date: new Date(`${todayInfo.dateString}T10:00:00.000Z`),
+        },
+      ]);
+
+      // Tomorrow has a custom assignment
+      prisma.customRoutineDayAssignment.findUnique.mockImplementation(
+        async ({ where }: any) => {
+          if (where.userId_dayOfWeek.dayOfWeek === tomorrowInfo.dayOfWeek) {
+            return {
+              id: 'assign-tomorrow',
+              userId,
+              dayOfWeek: tomorrowInfo.dayOfWeek,
+              workoutId: 'workout-tomorrow-id',
+              isRestDay: false,
+            };
+          }
+          return null;
+        },
+      );
+
+      const mockTomorrowWorkout: any = {
+        id: 'workout-tomorrow-id',
+        title: 'Tomorrow Workout Power',
+        exercises: [],
+      };
+      workoutsService.getWorkoutById.mockResolvedValue(mockTomorrowWorkout);
+
+      const result = await service.getTodayWorkout(userId, 'UTC');
+
+      expect(result.targetDay).toBe('tomorrow');
+      expect(result.isTodayCompleted).toBe(true);
+      expect(result.source).toBe('custom');
+      expect(result.dayOfWeek).toBe(tomorrowInfo.dayOfWeek);
+      expect(result.workout).toBe(mockTomorrowWorkout);
     });
   });
 });

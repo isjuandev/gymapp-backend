@@ -43,9 +43,77 @@ export class HomeService {
     userId: string,
     timezoneHeader?: string,
   ): Promise<TodayWorkoutResponseDto> {
-    const { dayOfWeek, dateString, effectiveTimezone } =
-      this.resolveDayInTimezone(timezoneHeader);
+    const todayInfo = this.resolveDayInTimezone(timezoneHeader);
 
+    // Check if user has already completed a workout session today in their timezone
+    const recentCompletedSessions = await this.prisma.workoutSession.findMany({
+      where: {
+        userId,
+        status: 'COMPLETED',
+      },
+      orderBy: { date: 'desc' },
+      take: 10,
+    });
+
+    const isTodayCompleted = recentCompletedSessions.some((session) => {
+      const sessionDayInfo = this.resolveDayInTimezone(
+        timezoneHeader,
+        new Date(session.date),
+      );
+      return sessionDayInfo.dateString === todayInfo.dateString;
+    });
+
+    if (isTodayCompleted) {
+      // Rotate to tomorrow's workout/rest day!
+      const tomorrowBase = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const tomorrowInfo = this.resolveDayInTimezone(
+        timezoneHeader,
+        tomorrowBase,
+      );
+
+      const tomorrowResolution = await this.resolveWorkoutForDay(
+        userId,
+        tomorrowInfo.dayOfWeek,
+        tomorrowInfo.dateString,
+        tomorrowInfo.effectiveTimezone,
+      );
+
+      return {
+        ...tomorrowResolution,
+        targetDay: 'tomorrow',
+        isTodayCompleted: true,
+      };
+    }
+
+    // Today is not completed yet -> resolve today's workout/rest day
+    const todayResolution = await this.resolveWorkoutForDay(
+      userId,
+      todayInfo.dayOfWeek,
+      todayInfo.dateString,
+      todayInfo.effectiveTimezone,
+    );
+
+    return {
+      ...todayResolution,
+      targetDay: 'today',
+      isTodayCompleted: false,
+    };
+  }
+
+  /**
+   * Resolves custom assignment, recommended plan, or rest day for a specific dayOfWeek and dateString.
+   */
+  private async resolveWorkoutForDay(
+    userId: string,
+    dayOfWeek: DayOfWeek,
+    dateString: string,
+    effectiveTimezone: string,
+  ): Promise<{
+    source: TodayWorkoutSource;
+    workout?: TodayWorkoutResponseDto['workout'];
+    dayOfWeek: DayOfWeek;
+    timezone: string;
+  }> {
     // 1. Check CustomRoutineDayAssignment for this user & dayOfWeek
     const assignment =
       await this.prisma.customRoutineDayAssignment.findUnique({
@@ -92,12 +160,12 @@ export class HomeService {
       );
 
       if (weeklyPlan && Array.isArray(weeklyPlan.days)) {
-        const todayPlanDay =
+        const matchingPlanDay =
           weeklyPlan.days.find((d) => d.date.startsWith(dateString)) ||
           weeklyPlan.days[DAYS_OF_WEEK_ORDER.indexOf(dayOfWeek)];
 
-        if (todayPlanDay) {
-          if (todayPlanDay.isRestDay || !todayPlanDay.workoutId) {
+        if (matchingPlanDay) {
+          if (matchingPlanDay.isRestDay || !matchingPlanDay.workoutId) {
             return {
               source: 'restDay',
               dayOfWeek,
@@ -107,7 +175,7 @@ export class HomeService {
 
           try {
             const workout = await this.workoutsService.getWorkoutById(
-              todayPlanDay.workoutId,
+              matchingPlanDay.workoutId,
               userId,
             );
             return {
@@ -118,7 +186,7 @@ export class HomeService {
             };
           } catch (err: any) {
             this.logger.warn(
-              `Recommended workout '${todayPlanDay.workoutId}' for user '${userId}' could not be resolved: ${err?.message || err}`,
+              `Recommended workout '${matchingPlanDay.workoutId}' for user '${userId}' could not be resolved: ${err?.message || err}`,
             );
           }
         }
@@ -138,10 +206,13 @@ export class HomeService {
   }
 
   /**
-   * Calculates the current dayOfWeek and YYYY-MM-DD date in the user's timezone.
+   * Calculates the dayOfWeek and YYYY-MM-DD date in the user's timezone for a given baseDate.
    * Defaults to 'UTC' if timeZoneInput is missing or not a valid IANA timezone identifier.
    */
-  resolveDayInTimezone(timeZoneInput?: string): TimezoneDayInfo {
+  resolveDayInTimezone(
+    timeZoneInput?: string,
+    baseDate: Date = new Date(),
+  ): TimezoneDayInfo {
     let effectiveTimezone = 'UTC';
 
     if (timeZoneInput && timeZoneInput.trim().length > 0) {
@@ -162,7 +233,7 @@ export class HomeService {
       day: '2-digit',
     });
 
-    const parts = formatter.formatToParts(new Date());
+    const parts = formatter.formatToParts(baseDate);
     const weekdayStr = parts
       .find((p) => p.type === 'weekday')
       ?.value?.toUpperCase();

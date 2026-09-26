@@ -33,4 +33,19 @@ export class TodayWorkoutResponseDto {
     description: 'Effective timezone used to resolve today (defaults to UTC)',
   })
   timezone?: string;
+
+  @ApiPropertyOptional({
+    enum: ['today', 'tomorrow'],
+    example: 'today',
+    description:
+      'Target day the resolved workout represents. If today was already completed, this transitions to tomorrow.',
+  })
+  targetDay?: 'today' | 'tomorrow';
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      'True if user already finished a workout session today in their timezone',
+  })
+  isTodayCompleted?: boolean;
 }
