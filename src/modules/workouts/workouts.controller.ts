@@ -22,6 +22,8 @@ import { WorkoutsService } from './workouts.service';
 import { ExercisesService } from './exercises.service';
 import { CreateWorkoutDto } from './dto/create-workout.dto';
 import { UpdateWorkoutDto } from './dto/update-workout.dto';
+import { CreateCustomWorkoutDto } from './dto/create-custom-workout.dto';
+import { UpdateCustomWorkoutDto } from './dto/update-custom-workout.dto';
 import { CreateExerciseDto } from './dto/create-exercise.dto';
 import { WorkoutResponseDto } from './dto/workout-response.dto';
 import { WorkoutDetailResponseDto } from './dto/workout-detail-response.dto';
@@ -39,6 +41,86 @@ export class WorkoutsController {
     private readonly workoutsService: WorkoutsService,
     private readonly exercisesService: ExercisesService,
   ) {}
+
+  // ============================================================================
+  // CUSTOM WORKOUTS (Static routes MUST precede parameterized :id)
+  // ============================================================================
+
+  @Post('custom')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create a custom workout for authenticated user',
+    description: 'Accepts only valid catalog exercise IDs. Sets ownerUserId to current user.',
+  })
+  @ApiResponse({
+    status: HttpStatus.CREATED,
+    description: 'Custom workout successfully created',
+    type: WorkoutDetailResponseDto,
+  })
+  async createCustomWorkout(
+    @CurrentUser('userId') userId: string,
+    @Body() dto: CreateCustomWorkoutDto,
+  ): Promise<WorkoutDetailResponseDto> {
+    return this.workoutsService.createCustomWorkout(userId, dto);
+  }
+
+  @Get('custom')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'List all custom workouts owned by authenticated user',
+    description: 'Returns workouts with equipment-resolved exercises and isCustom: true',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'List of custom workouts',
+    type: [WorkoutDetailResponseDto],
+  })
+  async getCustomWorkouts(
+    @CurrentUser('userId') userId: string,
+  ): Promise<WorkoutDetailResponseDto[]> {
+    return this.workoutsService.getCustomWorkouts(userId);
+  }
+
+  @Patch('custom/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Update a custom workout owned by authenticated user',
+    description: 'Validates user ownership (403 if not owner)',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Custom workout updated successfully',
+    type: WorkoutDetailResponseDto,
+  })
+  async updateCustomWorkout(
+    @CurrentUser('userId') userId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCustomWorkoutDto,
+  ): Promise<WorkoutDetailResponseDto> {
+    return this.workoutsService.updateCustomWorkout(id, userId, dto);
+  }
+
+  @Delete('custom/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Delete a custom workout owned by authenticated user',
+    description: 'Validates user ownership (403 if not owner)',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Custom workout deleted successfully',
+  })
+  async deleteCustomWorkout(
+    @CurrentUser('userId') userId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<{ message: string }> {
+    return this.workoutsService.deleteCustomWorkout(id, userId);
+  }
 
   @Get()
   @UseGuards(JwtAuthGuard)
