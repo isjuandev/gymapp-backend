@@ -12,6 +12,7 @@ import { CompleteWorkoutSessionDto } from './dto/complete-workout-session.dto';
 import { WorkoutSessionFilterDto } from './dto/workout-session-filter.dto';
 import { WorkoutSessionResponseDto } from './dto/workout-session-response.dto';
 import { CreateSetLogDto } from './dto/create-set-log.dto';
+import { BatchCreateSetLogsDto } from './dto/batch-create-set-logs.dto';
 import { SetLogResponseDto } from './dto/set-log-response.dto';
 import { ExerciseProgressResponseDto } from './dto/exercise-progress-response.dto';
 import { WorkoutSessionStatus } from '@prisma/client';
@@ -74,11 +75,67 @@ export class WorkoutSessionsService {
       );
     }
 
-    const completedSession =
-      await this.workoutSessionsRepository.completeSession(id, dto);
+    // Fetch workout with exercises to verify set requirements
+    const workout = await this.workoutsRepository.findByIdWithExercises(
+      session.workoutId,
+    );
+    const existingSets =
+      await this.workoutSessionsRepository.findSetLogsBySessionId(id);
 
-    // Progressive Overload Engine: Evaluate Double Progression for all logged sets in this session
-    await this.evaluateProgressiveOverload(id, userId);
+    // Rule 4: Sets are mandatory for any session marked as completed when workout contains exercises
+    if (workout && workout.exercises.length > 0 && existingSets.length === 0) {
+      throw new BadRequestException(
+        'Cannot complete workout session: workout has exercises but no sets were logged. At least one set log is required.',
+      );
+    }
+
+    // Resolve durationActualSeconds: use client value if provided and > 0, otherwise derive from sets or workout template
+    let durationActualSeconds = dto.durationActualSeconds;
+    if (
+      durationActualSeconds === undefined ||
+      durationActualSeconds === null ||
+      durationActualSeconds === 0
+    ) {
+      if (existingSets.length > 1) {
+        const firstTime = new Date(existingSets[0].completedAt).getTime();
+        const lastTime = new Date(
+          existingSets[existingSets.length - 1].completedAt,
+        ).getTime();
+        const elapsedSec = Math.round((lastTime - firstTime) / 1000);
+        durationActualSeconds =
+          elapsedSec > 30
+            ? elapsedSec + 60
+            : workout?.durationMinutes
+              ? workout.durationMinutes * 60
+              : 0;
+      } else if (workout?.durationMinutes) {
+        durationActualSeconds = workout.durationMinutes * 60;
+      } else {
+        durationActualSeconds = 0;
+      }
+    }
+
+    // Resolve kcalBurned: use client value if provided and > 0, otherwise derive from workout template or duration
+    let kcalBurned = dto.kcalBurned;
+    if (kcalBurned === undefined || kcalBurned === null || kcalBurned === 0) {
+      if (workout?.kcalEstimate && workout.kcalEstimate > 0) {
+        kcalBurned = workout.kcalEstimate;
+      } else if (durationActualSeconds > 0) {
+        kcalBurned = Math.round((durationActualSeconds / 60) * 6);
+      } else {
+        kcalBurned = 0;
+      }
+    }
+
+    const completedSession =
+      await this.workoutSessionsRepository.completeSession(id, {
+        durationActualSeconds,
+        kcalBurned,
+        avgHeartRate: dto.avgHeartRate ?? null,
+      });
+
+    // Progressive Overload Engine & PR synchronization for all logged sets in this session
+    await this.syncExerciseProgressAndPR(id, userId);
 
     // If an associated PlanDay exists for this workout on this date, complete it
     await this.workoutSessionsRepository.updateMatchingPlanDayToCompleted(
@@ -190,28 +247,92 @@ export class WorkoutSessionsService {
       );
     }
 
-    // Verify exercise exists
-    const exercise = await this.workoutSessionsRepository.findExerciseWithDetails(
-      dto.exerciseId,
-    );
+    // Verify exercise exists and belongs to the active workout
+    const exercise =
+      await this.workoutSessionsRepository.findExerciseInWorkout(
+        session.workoutId,
+        dto.exerciseId,
+      );
+
     if (!exercise) {
       throw new NotFoundException(
-        `Exercise with ID '${dto.exerciseId}' not found`,
-      );
-    }
-
-    // Verify exercise belongs to the workout being executed
-    if (exercise.workoutId !== session.workoutId) {
-      throw new BadRequestException(
-        `Exercise '${exercise.name}' does not belong to the active workout session`,
+        `Exercise with ID '${dto.exerciseId}' not found in active workout session`,
       );
     }
 
     const setLog = await this.workoutSessionsRepository.createSetLog(
       sessionId,
-      dto,
+      {
+        ...dto,
+        exerciseId: exercise.id,
+      },
     );
+
+    // Synchronize progressive overload and PR state immediately
+    await this.syncExerciseProgressAndPR(sessionId, userId);
+
     return SetLogResponseDto.fromEntity(setLog);
+  }
+
+  /**
+   * Record multiple completed sets in a single transaction (batch / retrospective mode).
+   */
+  async addBatchSetLogs(
+    sessionId: string,
+    userId: string,
+    dto: BatchCreateSetLogsDto,
+  ): Promise<SetLogResponseDto[]> {
+    const session = await this.workoutSessionsRepository.findById(sessionId);
+    if (!session) {
+      throw new NotFoundException(
+        `Workout session with ID '${sessionId}' not found`,
+      );
+    }
+
+    if (session.userId !== userId) {
+      throw new ForbiddenException(
+        'You do not have permission to modify this workout session',
+      );
+    }
+
+    if (session.status !== WorkoutSessionStatus.IN_PROGRESS) {
+      throw new ConflictException(
+        `Cannot log sets: session status is '${session.status}', must be IN_PROGRESS`,
+      );
+    }
+
+    // Validate that every exercise exists and belongs to this workout
+    const mappedSets: CreateSetLogDto[] = [];
+    for (const setDto of dto.sets) {
+      const exercise =
+        await this.workoutSessionsRepository.findExerciseInWorkout(
+          session.workoutId,
+          setDto.exerciseId,
+        );
+
+      if (!exercise) {
+        throw new NotFoundException(
+          `Exercise with ID '${setDto.exerciseId}' not found in active workout session`,
+        );
+      }
+
+      mappedSets.push({
+        ...setDto,
+        exerciseId: exercise.id,
+      });
+    }
+
+    // Create all sets in an atomic database transaction
+    const createdLogs =
+      await this.workoutSessionsRepository.createBatchSetLogs(
+        sessionId,
+        mappedSets,
+      );
+
+    // Synchronize progressive overload and PR state immediately
+    await this.syncExerciseProgressAndPR(sessionId, userId);
+
+    return createdLogs.map((log) => SetLogResponseDto.fromEntity(log));
   }
 
   /**
@@ -290,10 +411,19 @@ export class WorkoutSessionsService {
    *    - Else: consecutive = 1, suggestedNextWeightKg = null.
    * 3. Else: resets consecutive = 0, suggestedNextWeightKg = null.
    */
-  private async evaluateProgressiveOverload(
+  /**
+   * Decoupled service method that evaluates Double Progressive Overload
+   * and updates ExerciseProgressState and PR tracking for all working sets in a session.
+   * Called identically from single set logging (addSetLog), batch set logging (addBatchSetLogs),
+   * and session completion (completeSession).
+   */
+  async syncExerciseProgressAndPR(
     sessionId: string,
     userId: string,
   ): Promise<void> {
+    const session = await this.workoutSessionsRepository.findById(sessionId);
+    if (!session) return;
+
     const logs =
       await this.workoutSessionsRepository.findSetLogsBySessionId(sessionId);
     const workingLogs = logs.filter((log) => !log.isWarmup);
@@ -338,6 +468,12 @@ export class WorkoutSessionsService {
           exerciseId,
         );
 
+      const isSameSessionDate =
+        existingProgress?.lastSessionDate &&
+        session.date &&
+        new Date(existingProgress.lastSessionDate).toDateString() ===
+          new Date(session.date).toDateString();
+
       if (allHitTarget) {
         let consecutive = 1;
         if (
@@ -345,7 +481,9 @@ export class WorkoutSessionsService {
           Number(existingProgress.currentWorkingWeightKg) ===
             sessionWorkingWeight
         ) {
-          consecutive = existingProgress.consecutiveSessionsAtTarget + 1;
+          consecutive = isSameSessionDate
+            ? existingProgress.consecutiveSessionsAtTarget
+            : existingProgress.consecutiveSessionsAtTarget + 1;
         }
 
         let suggestedNextWeight: number | null = null;
@@ -363,7 +501,7 @@ export class WorkoutSessionsService {
             currentWorkingWeightKg: sessionWorkingWeight,
             consecutiveSessionsAtTarget: consecutive,
             suggestedNextWeightKg: suggestedNextWeight,
-            lastSessionDate: new Date(),
+            lastSessionDate: session.date || new Date(),
           },
         );
       } else {
@@ -377,11 +515,21 @@ export class WorkoutSessionsService {
             currentWorkingWeightKg: highestWeight,
             consecutiveSessionsAtTarget: 0,
             suggestedNextWeightKg: null,
-            lastSessionDate: new Date(),
+            lastSessionDate: session.date || new Date(),
           },
         );
       }
     }
+  }
+
+  /**
+   * Maintained for backward compatibility. Delegates directly to syncExerciseProgressAndPR.
+   */
+  async evaluateProgressiveOverload(
+    sessionId: string,
+    userId: string,
+  ): Promise<void> {
+    return this.syncExerciseProgressAndPR(sessionId, userId);
   }
 
   /**
@@ -535,7 +683,11 @@ export class WorkoutSessionsService {
       const best = sortedSets[0];
       const est1RM =
         Math.round(best.weightKg * (1 + best.reps / 30) * 10) / 10;
-      const dateStr = best.completedAt.toISOString().split('T')[0];
+      const dateStr = (
+        best.completedAt ? new Date(best.completedAt) : new Date()
+      )
+        .toISOString()
+        .split('T')[0];
 
       if (est1RM > overallMax1RM) {
         overallMax1RM = est1RM;

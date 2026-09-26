@@ -14,9 +14,9 @@ import {
 import { CreateSetLogDto } from '../dto/create-set-log.dto';
 
 export interface CompleteSessionData {
-  durationActualSeconds: number;
-  kcalBurned: number;
-  avgHeartRate?: number;
+  durationActualSeconds?: number | null;
+  kcalBurned?: number | null;
+  avgHeartRate?: number | null;
 }
 
 export type ExerciseWithEquipmentDetails = Exercise & {
@@ -169,6 +169,30 @@ export class WorkoutSessionsRepository {
     });
   }
 
+  async createBatchSetLogs(
+    sessionId: string,
+    dtos: CreateSetLogDto[],
+  ): Promise<ExerciseSetLog[]> {
+    return this.prisma.$transaction(async (tx) => {
+      const createdLogs: ExerciseSetLog[] = [];
+      for (const dto of dtos) {
+        const item = await tx.exerciseSetLog.create({
+          data: {
+            workoutSessionId: sessionId,
+            exerciseId: dto.exerciseId,
+            setNumber: dto.setNumber,
+            weightKg: dto.weightKg,
+            reps: dto.reps,
+            isWarmup: dto.isWarmup ?? false,
+            rpe: dto.rpe ?? null,
+          },
+        });
+        createdLogs.push(item);
+      }
+      return createdLogs;
+    });
+  }
+
   async findSetLogsBySessionId(sessionId: string): Promise<ExerciseSetLog[]> {
     return this.prisma.exerciseSetLog.findMany({
       where: { workoutSessionId: sessionId },
@@ -197,6 +221,35 @@ export class WorkoutSessionsRepository {
   ): Promise<ExerciseWithEquipmentDetails | null> {
     return this.prisma.exercise.findUnique({
       where: { id: exerciseId },
+      include: {
+        requiredEquipment: true,
+        catalogItem: {
+          include: {
+            equipment: true,
+          },
+        },
+      },
+    });
+  }
+
+  async findExerciseInWorkout(
+    workoutId: string,
+    exerciseId: string,
+  ): Promise<ExerciseWithEquipmentDetails | null> {
+    const exercise = await this.findExerciseWithDetails(exerciseId);
+    if (exercise && exercise.workoutId === workoutId) {
+      return exercise;
+    }
+
+    return this.prisma.exercise.findFirst({
+      where: {
+        workoutId,
+        OR: [
+          { id: exerciseId },
+          { catalogId: exerciseId },
+          { substitutionGroupId: exerciseId },
+        ],
+      },
       include: {
         requiredEquipment: true,
         catalogItem: {

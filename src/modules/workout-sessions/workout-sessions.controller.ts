@@ -24,6 +24,7 @@ import { CompleteWorkoutSessionDto } from './dto/complete-workout-session.dto';
 import { WorkoutSessionFilterDto } from './dto/workout-session-filter.dto';
 import { WorkoutSessionResponseDto } from './dto/workout-session-response.dto';
 import { CreateSetLogDto } from './dto/create-set-log.dto';
+import { BatchCreateSetLogsDto } from './dto/batch-create-set-logs.dto';
 import { SetLogResponseDto } from './dto/set-log-response.dto';
 import { ExerciseProgressResponseDto } from './dto/exercise-progress-response.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -175,6 +176,35 @@ export class WorkoutSessionsController {
     @Body() dto: CreateSetLogDto,
   ): Promise<SetLogResponseDto> {
     return this.workoutSessionsService.addSetLog(id, userId, dto);
+  }
+
+  @Post(':id/sets/batch')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary:
+      'Log multiple completed sets in a single transaction (batch / retrospective mode)',
+    description:
+      'Records an array of sets across one or multiple exercises atomically. If any set is invalid, rolls back the entire batch.',
+  })
+  @ApiResponse({
+    status: HttpStatus.CREATED,
+    description: 'All sets logged successfully in transaction',
+    type: [SetLogResponseDto],
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Session or Exercise not found',
+  })
+  @ApiResponse({
+    status: HttpStatus.CONFLICT,
+    description: 'Session is not IN_PROGRESS',
+  })
+  async addBatchSetLogs(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') userId: string,
+    @Body() dto: BatchCreateSetLogsDto,
+  ): Promise<SetLogResponseDto[]> {
+    return this.workoutSessionsService.addBatchSetLogs(id, userId, dto);
   }
 
   @Get(':id/sets')
