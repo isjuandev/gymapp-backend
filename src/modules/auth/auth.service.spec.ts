@@ -4,12 +4,15 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { AuthRepository } from './repositories/auth.repository';
+import { AppleTokenVerifier } from './apple-token-verifier.service';
+import { AppleLoginDto } from './dto/apple-login.dto';
 import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 describe('AuthService', () => {
   let service: AuthService;
   let authRepository: jest.Mocked<AuthRepository>;
+  let appleTokenVerifier: jest.Mocked<AppleTokenVerifier>;
 
   const mockUser = {
     id: 'user-uuid-123',
@@ -20,13 +23,24 @@ describe('AuthService', () => {
     goalType: null,
     joinDate: new Date('2026-01-01T00:00:00.000Z'),
     role: UserRole.MEMBER,
+    appleId: null,
   };
+
+  const appleIdentifier = 'apple-user-001';
+
+  const buildAppleLoginDto = (overrides: Partial<AppleLoginDto> = {}) => ({
+    userIdentifier: appleIdentifier,
+    identityToken: 'valid.apple.identity.token',
+    ...overrides,
+  });
 
   beforeEach(async () => {
     const mockAuthRepository = {
       findUserByEmail: jest.fn(),
       findUserById: jest.fn(),
+      findUserByAppleId: jest.fn(),
       createUser: jest.fn(),
+      updateUser: jest.fn(),
       saveRefreshToken: jest.fn(),
       findRefreshToken: jest.fn(),
       revokeRefreshToken: jest.fn(),
@@ -42,8 +56,13 @@ describe('AuthService', () => {
         if (key === 'JWT_SECRET') return 'test_jwt_secret_key_12345';
         if (key === 'JWT_REFRESH_SECRET')
           return 'test_jwt_refresh_secret_key_12345';
+        if (key === 'APPLE_BUNDLE_ID') return 'com.nexobite.GymApp';
         return undefined;
       }),
+    };
+
+    const mockAppleTokenVerifier = {
+      verify: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -52,11 +71,13 @@ describe('AuthService', () => {
         { provide: AuthRepository, useValue: mockAuthRepository },
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: AppleTokenVerifier, useValue: mockAppleTokenVerifier },
       ],
     }).compile();
 
     service = module.get<AuthService>(AuthService);
     authRepository = module.get(AuthRepository);
+    appleTokenVerifier = module.get(AppleTokenVerifier);
   });
 
   describe('register', () => {
@@ -157,6 +178,127 @@ describe('AuthService', () => {
           password: 'WrongPassword999!',
         }),
       ).rejects.toThrow(UnauthorizedException);
+    });
+  });
+
+  describe('appleLogin', () => {
+    beforeEach(() => {
+      authRepository.saveRefreshToken.mockResolvedValue({
+        id: 'token-uuid',
+        userId: mockUser.id,
+        tokenHash: 'hashed-token',
+        revoked: false,
+        expiresAt: new Date(),
+        createdAt: new Date(),
+      });
+    });
+
+    it('should create a new user on first Apple login with a verified token', async () => {
+      appleTokenVerifier.verify.mockResolvedValue({
+        sub: appleIdentifier,
+        email: 'apple.user@privaterelay.appleid.com',
+        emailVerified: true,
+      });
+      authRepository.findUserByAppleId.mockResolvedValue(null);
+      authRepository.findUserByEmail.mockResolvedValue(null);
+      authRepository.createUser.mockResolvedValue({
+        ...mockUser,
+        email: 'apple.user@privaterelay.appleid.com',
+        appleId: appleIdentifier,
+      });
+
+      const result = await service.appleLogin(buildAppleLoginDto());
+
+      expect(appleTokenVerifier.verify).toHaveBeenCalledWith(
+        'valid.apple.identity.token',
+      );
+      expect(authRepository.findUserByAppleId).toHaveBeenCalledWith(
+        appleIdentifier,
+      );
+      expect(authRepository.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          appleId: appleIdentifier,
+          email: 'apple.user@privaterelay.appleid.com',
+          role: UserRole.MEMBER,
+        }),
+      );
+      expect(result.accessToken).toBe('mocked-jwt-access-token');
+      expect(result.user.id).toBe(mockUser.id);
+    });
+
+    it('should log in an existing user found by appleId without mutating it', async () => {
+      const existingUser = { ...mockUser, appleId: appleIdentifier };
+      appleTokenVerifier.verify.mockResolvedValue({ sub: appleIdentifier });
+      authRepository.findUserByAppleId.mockResolvedValue(existingUser as any);
+      authRepository.createUser.mockResolvedValue(existingUser as any);
+
+      const result = await service.appleLogin(buildAppleLoginDto());
+
+      expect(authRepository.findUserByAppleId).toHaveBeenCalledWith(
+        appleIdentifier,
+      );
+      expect(authRepository.createUser).not.toHaveBeenCalled();
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
+      expect(result.user.id).toBe(existingUser.id);
+    });
+
+    it('should link appleId to an existing user found by email', async () => {
+      const existingUser = { ...mockUser, appleId: null };
+      appleTokenVerifier.verify.mockResolvedValue({
+        sub: appleIdentifier,
+        email: existingUser.email,
+      });
+      authRepository.findUserByAppleId.mockResolvedValue(null);
+      authRepository.findUserByEmail.mockResolvedValue(existingUser as any);
+      authRepository.updateUser.mockResolvedValue({
+        ...existingUser,
+        appleId: appleIdentifier,
+      } as any);
+
+      await service.appleLogin(buildAppleLoginDto());
+
+      expect(authRepository.updateUser).toHaveBeenCalledWith(existingUser.id, {
+        appleId: appleIdentifier,
+        name: undefined,
+      });
+    });
+
+    it('should throw UnauthorizedException when token sub does not match userIdentifier', async () => {
+      appleTokenVerifier.verify.mockResolvedValue({
+        sub: 'different-apple-user',
+      });
+
+      await expect(
+        service.appleLogin(buildAppleLoginDto()),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(authRepository.createUser).not.toHaveBeenCalled();
+    });
+
+    it('should throw UnauthorizedException when the identity token is invalid', async () => {
+      appleTokenVerifier.verify.mockRejectedValue(
+        new UnauthorizedException('Invalid Apple identity token'),
+      );
+
+      await expect(
+        service.appleLogin(buildAppleLoginDto()),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(authRepository.findUserByAppleId).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to a deterministic relay email when no email is available', async () => {
+      appleTokenVerifier.verify.mockResolvedValue({ sub: appleIdentifier });
+      authRepository.findUserByAppleId.mockResolvedValue(null);
+      authRepository.findUserByEmail.mockResolvedValue(null);
+      authRepository.createUser.mockResolvedValue({
+        ...mockUser,
+        appleId: appleIdentifier,
+      } as any);
+
+      await service.appleLogin(buildAppleLoginDto());
+
+      expect(authRepository.findUserByEmail).toHaveBeenCalledWith(
+        `apple_${appleIdentifier}@privaterelay.appleid.com`,
+      );
     });
   });
 

@@ -16,6 +16,7 @@ import { AppleLoginDto } from './dto/apple-login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { AppleTokenVerifier } from './apple-token-verifier.service';
 import { User, UserRole } from '@prisma/client';
 
 @Injectable()
@@ -33,6 +34,7 @@ export class AuthService {
     private readonly authRepository: AuthRepository,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly appleTokenVerifier: AppleTokenVerifier,
   ) {
     this.jwtSecret = this.configService.get<string>('JWT_SECRET', '');
     this.jwtRefreshSecret = this.configService.get<string>(
@@ -96,33 +98,26 @@ export class AuthService {
       throw new BadRequestException('userIdentifier is required');
     }
 
-    // 1. Try to extract email from Apple identityToken payload if not provided
-    let email = dto.email?.trim().toLowerCase();
-    if (!email && dto.identityToken) {
-      try {
-        const parts = dto.identityToken.split('.');
-        if (parts.length >= 2) {
-          const payloadJson = Buffer.from(parts[1], 'base64').toString('utf-8');
-          const payload = JSON.parse(payloadJson);
-          if (payload && payload.email) {
-            email = String(payload.email).trim().toLowerCase();
-          }
-        }
-      } catch (e) {
-        this.logger.warn(
-          `Could not parse Apple identityToken payload: ${(e as Error).message}`,
-        );
-      }
+    // 1. Verify the Apple identity token: RS256 signature against Apple's JWKS,
+    //    issuer, audience (APPLE_BUNDLE_ID) and expiration.
+    const appleClaims = await this.appleTokenVerifier.verify(
+      dto.identityToken,
+    );
+    if (appleClaims.sub !== userIdentifier) {
+      throw new UnauthorizedException(
+        'Apple identity token does not match the provided user identifier',
+      );
     }
 
-    // Fallback deterministic email if still missing
+    // 2. Resolve email: explicit client value > verified token claim > deterministic fallback
+    let email = dto.email?.trim().toLowerCase() || appleClaims.email;
     if (!email) {
       email = `apple_${userIdentifier}@privaterelay.appleid.com`;
     }
 
     const name = dto.fullName?.trim() || 'Usuario Apple';
 
-    // 2. Find existing user by appleId OR by email
+    // 3. Find existing user by appleId OR by email
     let user = await this.authRepository.findUserByAppleId(userIdentifier);
     if (!user) {
       user = await this.authRepository.findUserByEmail(email);
