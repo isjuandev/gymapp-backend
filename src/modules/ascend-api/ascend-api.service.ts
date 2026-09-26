@@ -15,15 +15,19 @@ export class AscendApiService {
   private readonly baseUrl: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.apiKey =
-      this.configService.get<string>('RAPIDAPI_KEY') ||
-      '99b190a402msh00075f9824c208fp13c131jsna849b85796b9';
+    this.apiKey = this.configService.get<string>('RAPIDAPI_KEY') || '';
     this.apiHost =
       this.configService.get<string>('RAPIDAPI_HOST') ||
       'edb-with-videos-and-images-by-ascendapi.p.rapidapi.com';
     this.baseUrl =
       this.configService.get<string>('ASCEND_API_BASE_URL') ||
       'https://edb-with-videos-and-images-by-ascendapi.p.rapidapi.com';
+
+    if (!this.apiKey) {
+      this.logger.warn(
+        'RAPIDAPI_KEY is not configured: AscendAPI catalog sync will be disabled',
+      );
+    }
   }
 
   private get headers(): Record<string, string> {

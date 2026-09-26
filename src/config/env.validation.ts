@@ -18,10 +18,7 @@ export const envSchema = z.object({
       8,
       'JWT_REFRESH_SECRET is required and must be at least 8 characters long',
     ),
-  RAPIDAPI_KEY: z
-    .string()
-    .optional()
-    .default('99b190a402msh00075f9824c208fp13c131jsna849b85796b9'),
+  RAPIDAPI_KEY: z.string().optional(),
   RAPIDAPI_HOST: z
     .string()
     .default('edb-with-videos-and-images-by-ascendapi.p.rapidapi.com'),
@@ -30,6 +27,7 @@ export const envSchema = z.object({
     .default(
       'https://edb-with-videos-and-images-by-ascendapi.p.rapidapi.com',
     ),
+  APPLE_BUNDLE_ID: z.string().default('com.nexobite.GymApp'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
