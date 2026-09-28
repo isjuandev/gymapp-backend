@@ -75,6 +75,18 @@ describe('RecommendationService', () => {
 
   beforeEach(async () => {
     prisma = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        update: jest.fn(),
+      },
+      userPlan: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn(),
+      },
+      customRoutineDayAssignment: {
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+      },
       onboardingProfile: {
         findUnique: jest.fn(),
       },
@@ -302,6 +314,70 @@ describe('RecommendationService', () => {
       expect(prisma.weeklyPlan.delete).toHaveBeenCalledWith({
         where: { id: existingPlan.id },
       });
+    });
+
+    it('should rewrite the single schedule with PRESET origin in the same transaction', async () => {
+      prisma.onboardingProfile.findUnique.mockResolvedValue(mockProfile);
+      prisma.program.findMany.mockResolvedValue([mockProgram]);
+      prisma.weeklyPlan.findFirst.mockResolvedValue(null);
+      prisma.weeklyPlan.create.mockImplementation((args: any) => ({
+        id: 'plan-new-id',
+        userId,
+        weekStartDate: monday,
+        days: args.data.days.create,
+      }));
+
+      await service.generateWeeklyPlan(userId, monday);
+
+      expect(prisma.customRoutineDayAssignment.deleteMany).toHaveBeenCalledWith({
+        where: { userId },
+      });
+      expect(prisma.customRoutineDayAssignment.createMany).toHaveBeenCalledWith({
+        data: expect.arrayContaining([
+          expect.objectContaining({
+            userId,
+            dayOfWeek: 'MONDAY',
+            origin: 'PRESET_GENERATED',
+          }),
+        ]),
+      });
+      expect(
+        prisma.customRoutineDayAssignment.createMany.mock.calls[0][0].data,
+      ).toHaveLength(7);
+    });
+
+    it('should upsert the canonical PRESET UserPlan row', async () => {
+      prisma.onboardingProfile.findUnique.mockResolvedValue(mockProfile);
+      prisma.program.findMany.mockResolvedValue([mockProgram]);
+      prisma.weeklyPlan.findFirst.mockResolvedValue(null);
+      prisma.weeklyPlan.create.mockResolvedValue({
+        id: 'plan-new-id',
+        userId,
+        weekStartDate: monday,
+        days: [],
+      });
+
+      await service.generateWeeklyPlan(userId, monday);
+
+      expect(prisma.userPlan.upsert).toHaveBeenCalledWith({
+        where: { userId },
+        create: expect.objectContaining({ planType: 'PRESET' }),
+        update: expect.objectContaining({ planType: 'PRESET' }),
+      });
+    });
+
+    it('should reject regeneration for CUSTOM plans without override (409)', async () => {
+      prisma.onboardingProfile.findUnique.mockResolvedValue(mockProfile);
+      prisma.program.findMany.mockResolvedValue([mockProgram]);
+      prisma.userPlan.findUnique.mockResolvedValue({
+        userId,
+        planType: 'CUSTOM',
+      });
+
+      await expect(service.generateWeeklyPlan(userId, monday)).rejects.toThrow(
+        'custom plan',
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 

@@ -5,8 +5,12 @@ import {
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
-import { WorkoutSessionsRepository } from './repositories/workout-sessions.repository';
+import {
+  WorkoutSessionsRepository,
+  SessionDbClient,
+} from './repositories/workout-sessions.repository';
 import { WorkoutsRepository } from '../workouts/repositories/workouts.repository';
+import { PrismaService } from '../../prisma/prisma.service';
 import { CreateWorkoutSessionDto } from './dto/create-workout-session.dto';
 import { CompleteWorkoutSessionDto } from './dto/complete-workout-session.dto';
 import { WorkoutSessionFilterDto } from './dto/workout-session-filter.dto';
@@ -15,11 +19,12 @@ import { CreateSetLogDto } from './dto/create-set-log.dto';
 import { BatchCreateSetLogsDto } from './dto/batch-create-set-logs.dto';
 import { SetLogResponseDto } from './dto/set-log-response.dto';
 import { ExerciseProgressResponseDto } from './dto/exercise-progress-response.dto';
-import { WorkoutSessionStatus } from '@prisma/client';
+import { GoalType, WorkoutSessionStatus } from '@prisma/client';
 
 @Injectable()
 export class WorkoutSessionsService {
   constructor(
+    private readonly prisma: PrismaService,
     private readonly workoutSessionsRepository: WorkoutSessionsRepository,
     private readonly workoutsRepository: WorkoutsRepository,
   ) {}
@@ -50,6 +55,11 @@ export class WorkoutSessionsService {
   /**
    * CompleteWorkoutSessionUseCase: Validates ownership and IN_PROGRESS state, records metrics,
    * updates status to COMPLETED, evaluates progressive overload for completed sets, and synchronizes matching daily plan if active.
+   *
+   * Fase 2 (invariant 6): the writes below run in ONE interactive transaction
+   * (session COMPLETED + per-exercise progress/PR upserts + matching PlanDay
+   * COMPLETED + LOSE_WEIGHT goal refresh). Live and retrospective logging hit
+   * this same method, so both paths share the flow.
    */
   async completeSession(
     id: string,
@@ -127,24 +137,69 @@ export class WorkoutSessionsService {
       }
     }
 
-    const completedSession =
-      await this.workoutSessionsRepository.completeSession(id, {
-        durationActualSeconds,
-        kcalBurned,
-        avgHeartRate: dto.avgHeartRate ?? null,
-      });
+    const completedSession = await this.prisma.$transaction(async (tx) => {
+      const updated = await this.workoutSessionsRepository.completeSession(
+        id,
+        {
+          durationActualSeconds,
+          kcalBurned,
+          avgHeartRate: dto.avgHeartRate ?? null,
+        },
+        tx,
+      );
 
-    // Progressive Overload Engine & PR synchronization for all logged sets in this session
-    await this.syncExerciseProgressAndPR(id, userId);
+      // Progressive Overload Engine & PR synchronization for all logged sets
+      await this.syncExerciseProgressAndPR(id, userId, tx);
 
-    // If an associated PlanDay exists for this workout on this date, complete it
-    await this.workoutSessionsRepository.updateMatchingPlanDayToCompleted(
-      userId,
-      session.workoutId,
-      session.date,
-    );
+      // If an associated PlanDay exists for this workout on this date, complete it
+      await this.workoutSessionsRepository.updateMatchingPlanDayToCompleted(
+        userId,
+        session.workoutId,
+        session.date,
+        tx,
+      );
+
+      // Keep an active LOSE_WEIGHT goal in step with the latest weighed value
+      await this.refreshLoseWeightGoal(tx, userId);
+
+      return updated;
+    });
 
     return WorkoutSessionResponseDto.fromEntity(completedSession);
+  }
+
+  /**
+   * Syncs an active LOSE_WEIGHT goal's currentValue with the latest weight
+   * entry. Weight-driven goals advance through weight entries; this keeps the
+   * row fresh as part of the complete-session flow instead of drifting.
+   */
+  private async refreshLoseWeightGoal(
+    db: SessionDbClient,
+    userId: string,
+  ): Promise<void> {
+    const now = new Date();
+    const activeGoal = await db.goal.findFirst({
+      where: {
+        userId,
+        type: GoalType.LOSE_WEIGHT,
+        OR: [{ deadline: null }, { deadline: { gte: now } }],
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!activeGoal) return;
+
+    const latestWeight = await db.weightEntry.findFirst({
+      where: { userId },
+      orderBy: { date: 'desc' },
+    });
+    if (!latestWeight) return;
+
+    if (Number(activeGoal.currentValue) !== Number(latestWeight.weightKg)) {
+      await db.goal.update({
+        where: { id: activeGoal.id },
+        data: { currentValue: latestWeight.weightKg },
+      });
+    }
   }
 
   /**
@@ -248,11 +303,10 @@ export class WorkoutSessionsService {
     }
 
     // Verify exercise exists and belongs to the active workout
-    const exercise =
-      await this.workoutSessionsRepository.findExerciseInWorkout(
-        session.workoutId,
-        dto.exerciseId,
-      );
+    const exercise = await this.workoutSessionsRepository.findExerciseInWorkout(
+      session.workoutId,
+      dto.exerciseId,
+    );
 
     if (!exercise) {
       throw new NotFoundException(
@@ -323,11 +377,10 @@ export class WorkoutSessionsService {
     }
 
     // Create all sets in an atomic database transaction
-    const createdLogs =
-      await this.workoutSessionsRepository.createBatchSetLogs(
-        sessionId,
-        mappedSets,
-      );
+    const createdLogs = await this.workoutSessionsRepository.createBatchSetLogs(
+      sessionId,
+      mappedSets,
+    );
 
     // Synchronize progressive overload and PR state immediately
     await this.syncExerciseProgressAndPR(sessionId, userId);
@@ -415,17 +468,22 @@ export class WorkoutSessionsService {
    * Decoupled service method that evaluates Double Progressive Overload
    * and updates ExerciseProgressState and PR tracking for all working sets in a session.
    * Called identically from single set logging (addSetLog), batch set logging (addBatchSetLogs),
-   * and session completion (completeSession).
+   * and session completion (completeSession). Accepts an optional transaction
+   * client so completeSession runs everything atomically.
    */
   async syncExerciseProgressAndPR(
     sessionId: string,
     userId: string,
+    db?: SessionDbClient,
   ): Promise<void> {
-    const session = await this.workoutSessionsRepository.findById(sessionId);
+    const repo = this.workoutSessionsRepository;
+    const session = await repo.findById(sessionId, db ?? this.prisma);
     if (!session) return;
 
-    const logs =
-      await this.workoutSessionsRepository.findSetLogsBySessionId(sessionId);
+    const logs = await repo.findSetLogsBySessionId(
+      sessionId,
+      db ?? this.prisma,
+    );
     const workingLogs = logs.filter((log) => !log.isWarmup);
     if (workingLogs.length === 0) return;
 
@@ -438,8 +496,10 @@ export class WorkoutSessionsService {
     }
 
     for (const [exerciseId, exerciseSets] of logsByExercise.entries()) {
-      const exercise =
-        await this.workoutSessionsRepository.findExerciseWithDetails(exerciseId);
+      const exercise = await repo.findExerciseWithDetails(
+        exerciseId,
+        db ?? this.prisma,
+      );
       if (!exercise) continue;
 
       const equipment =
@@ -462,11 +522,11 @@ export class WorkoutSessionsService {
         ...exerciseSets.map((s) => Number(s.weightKg)),
       );
 
-      const existingProgress =
-        await this.workoutSessionsRepository.findProgressState(
-          userId,
-          exerciseId,
-        );
+      const existingProgress = await repo.findProgressState(
+        userId,
+        exerciseId,
+        db ?? this.prisma,
+      );
 
       const isSameSessionDate =
         existingProgress?.lastSessionDate &&
@@ -494,7 +554,7 @@ export class WorkoutSessionsService {
           }
         }
 
-        await this.workoutSessionsRepository.upsertProgressState(
+        await repo.upsertProgressState(
           userId,
           exerciseId,
           {
@@ -503,12 +563,13 @@ export class WorkoutSessionsService {
             suggestedNextWeightKg: suggestedNextWeight,
             lastSessionDate: session.date || new Date(),
           },
+          db ?? this.prisma,
         );
       } else {
         const highestWeight = Math.max(
           ...exerciseSets.map((s) => Number(s.weightKg)),
         );
-        await this.workoutSessionsRepository.upsertProgressState(
+        await repo.upsertProgressState(
           userId,
           exerciseId,
           {
@@ -517,6 +578,7 @@ export class WorkoutSessionsService {
             suggestedNextWeightKg: null,
             lastSessionDate: session.date || new Date(),
           },
+          db ?? this.prisma,
         );
       }
     }
@@ -542,9 +604,7 @@ export class WorkoutSessionsService {
     const exercise =
       await this.workoutSessionsRepository.findExerciseWithDetails(exerciseId);
     if (!exercise) {
-      throw new NotFoundException(
-        `Exercise with ID '${exerciseId}' not found`,
-      );
+      throw new NotFoundException(`Exercise with ID '${exerciseId}' not found`);
     }
 
     const equipment =
@@ -623,16 +683,11 @@ export class WorkoutSessionsService {
   /**
    * Get exercise history table and PR for a specific exercise and authenticated user.
    */
-  async getExerciseHistory(
-    userId: string,
-    exerciseId: string,
-  ): Promise<any> {
+  async getExerciseHistory(userId: string, exerciseId: string): Promise<any> {
     const exercise =
       await this.workoutSessionsRepository.findExerciseWithDetails(exerciseId);
     if (!exercise) {
-      throw new NotFoundException(
-        `Exercise with ID '${exerciseId}' not found`,
-      );
+      throw new NotFoundException(`Exercise with ID '${exerciseId}' not found`);
     }
 
     const progress = await this.workoutSessionsRepository.findProgressState(
@@ -681,8 +736,7 @@ export class WorkoutSessionsService {
       });
 
       const best = sortedSets[0];
-      const est1RM =
-        Math.round(best.weightKg * (1 + best.reps / 30) * 10) / 10;
+      const est1RM = Math.round(best.weightKg * (1 + best.reps / 30) * 10) / 10;
       const dateStr = (
         best.completedAt ? new Date(best.completedAt) : new Date()
       )
@@ -738,9 +792,7 @@ export class WorkoutSessionsService {
     const exercise =
       await this.workoutSessionsRepository.findExerciseWithDetails(exerciseId);
     if (!exercise) {
-      throw new NotFoundException(
-        `Exercise with ID '${exerciseId}' not found`,
-      );
+      throw new NotFoundException(`Exercise with ID '${exerciseId}' not found`);
     }
 
     const updated = await this.workoutSessionsRepository.updateExerciseNotes(

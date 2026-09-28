@@ -3,60 +3,47 @@ import { HomeService } from './home.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { WorkoutsService } from '../workouts/workouts.service';
 import { PlanService } from '../plan/plan.service';
-import { DayOfWeek, PlanDayStatus } from '@prisma/client';
+import { DayOfWeek, ScheduleOrigin } from '@prisma/client';
 
+/**
+ * HomeService is a thin projection over PlanService.getPlanState (Fase 2).
+ * These tests verify the source mapping, not the resolution itself
+ * (resolution is covered by plan-consistency specs).
+ */
 describe('HomeService', () => {
   let service: HomeService;
-  let prisma: {
-    customRoutineDayAssignment: {
-      findUnique: jest.Mock;
-    };
-    workoutSession: {
-      findMany: jest.Mock;
-    };
-  };
-  let workoutsService: {
-    getWorkoutById: jest.Mock;
-  };
   let planService: {
-    getPlanByWeek: jest.Mock;
+    getPlanState: jest.Mock;
   };
 
   const userId = 'user-home-test-123';
 
+  const baseState = (today: any) => ({
+    state: 'active',
+    plan: {
+      type: 'preset',
+      programId: 'prog-1',
+      programTitle: 'Programa',
+      goal: 'LOSE_WEIGHT',
+      weekNumber: 1,
+      totalWeeks: 12,
+      startedAt: new Date().toISOString(),
+    },
+    schedule: [],
+    today,
+  });
+
   beforeEach(async () => {
-    prisma = {
-      customRoutineDayAssignment: {
-        findUnique: jest.fn(),
-      },
-      workoutSession: {
-        findMany: jest.fn().mockResolvedValue([]),
-      },
-    };
-
-    workoutsService = {
-      getWorkoutById: jest.fn(),
-    };
-
     planService = {
-      getPlanByWeek: jest.fn(),
+      getPlanState: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         HomeService,
-        {
-          provide: PrismaService,
-          useValue: prisma,
-        },
-        {
-          provide: WorkoutsService,
-          useValue: workoutsService,
-        },
-        {
-          provide: PlanService,
-          useValue: planService,
-        },
+        { provide: PrismaService, useValue: {} },
+        { provide: WorkoutsService, useValue: {} },
+        { provide: PlanService, useValue: planService },
       ],
     }).compile();
 
@@ -76,243 +63,134 @@ describe('HomeService', () => {
     });
 
     it('should fallback to UTC when timezone is invalid or omitted', () => {
-      const resInvalid = service.resolveDayInTimezone('Invalid/Zone_Name');
-      expect(resInvalid.effectiveTimezone).toBe('UTC');
-
-      const resOmitted = service.resolveDayInTimezone(undefined);
-      expect(resOmitted.effectiveTimezone).toBe('UTC');
-
-      const resEmpty = service.resolveDayInTimezone('   ');
-      expect(resEmpty.effectiveTimezone).toBe('UTC');
+      expect(
+        service.resolveDayInTimezone('Invalid/Zone_Name').effectiveTimezone,
+      ).toBe('UTC');
+      expect(
+        service.resolveDayInTimezone(undefined).effectiveTimezone,
+      ).toBe('UTC');
+      expect(service.resolveDayInTimezone('   ').effectiveTimezone).toBe(
+        'UTC',
+      );
     });
   });
 
-  describe('getTodayWorkout', () => {
-    it('Priority 1a: should return custom workout when assignment has workoutId', async () => {
-      const { dayOfWeek } = service.resolveDayInTimezone('UTC');
-
-      prisma.customRoutineDayAssignment.findUnique.mockResolvedValue({
-        id: 'assign-1',
-        userId,
-        dayOfWeek,
-        workoutId: 'workout-custom-1',
-        isRestDay: false,
-      });
-
-      const mockResolvedWorkout: any = {
-        id: 'workout-custom-1',
-        title: 'Mi Rutina Custom',
-        isCustom: true,
-        exercises: [],
-      };
-      workoutsService.getWorkoutById.mockResolvedValue(mockResolvedWorkout);
+  describe('getTodayWorkout (projection over plan state)', () => {
+    it('should map MANUAL workout days to source custom', async () => {
+      const workout: any = { id: 'w-custom', title: 'Mi Rutina' };
+      planService.getPlanState.mockResolvedValue(
+        baseState({
+          date: '2026-09-28',
+          dayOfWeek: DayOfWeek.MONDAY,
+          status: 'workout',
+          targetDay: 'today',
+          isTodayCompleted: false,
+          workout,
+          origin: ScheduleOrigin.MANUAL,
+          timezone: 'UTC',
+        }),
+      );
 
       const result = await service.getTodayWorkout(userId, 'UTC');
 
+      expect(planService.getPlanState).toHaveBeenCalledWith(userId, 'UTC');
       expect(result.source).toBe('custom');
-      expect(result.workout).toBe(mockResolvedWorkout);
-      expect(result.dayOfWeek).toBe(dayOfWeek);
-      expect(result.timezone).toBe('UTC');
-      expect(workoutsService.getWorkoutById).toHaveBeenCalledWith(
-        'workout-custom-1',
-        userId,
-      );
-      expect(planService.getPlanByWeek).not.toHaveBeenCalled();
-    });
-
-    it('Priority 1b: should return restDay when assignment has isRestDay: true', async () => {
-      const { dayOfWeek } = service.resolveDayInTimezone('UTC');
-
-      prisma.customRoutineDayAssignment.findUnique.mockResolvedValue({
-        id: 'assign-2',
-        userId,
-        dayOfWeek,
-        workoutId: null,
-        isRestDay: true,
-      });
-
-      const result = await service.getTodayWorkout(userId, 'UTC');
-
-      expect(result.source).toBe('restDay');
-      expect(result.workout).toBeUndefined();
-      expect(result.dayOfWeek).toBe(dayOfWeek);
-      expect(workoutsService.getWorkoutById).not.toHaveBeenCalled();
-      expect(planService.getPlanByWeek).not.toHaveBeenCalled();
-    });
-
-    it('Priority 2a: should fall back to recommended plan workout when no custom assignment exists', async () => {
-      const { dayOfWeek, dateString } = service.resolveDayInTimezone('UTC');
-
-      prisma.customRoutineDayAssignment.findUnique.mockResolvedValue(null);
-
-      const mockPlanDay = {
-        id: 'plan-day-1',
-        weeklyPlanId: 'week-1',
-        date: `${dateString}T00:00:00.000Z`,
-        workoutId: 'workout-recommended-1',
-        isRestDay: false,
-        status: PlanDayStatus.UPCOMING,
-      };
-
-      planService.getPlanByWeek.mockResolvedValue({
-        id: 'week-1',
-        userId,
-        weekStartDate: '2026-09-21T00:00:00.000Z',
-        days: [mockPlanDay],
-      });
-
-      const mockRecommendedWorkout: any = {
-        id: 'workout-recommended-1',
-        title: 'Fuerza Total',
-        isCustom: false,
-        exercises: [],
-      };
-      workoutsService.getWorkoutById.mockResolvedValue(mockRecommendedWorkout);
-
-      const result = await service.getTodayWorkout(userId, 'UTC');
-
-      expect(result.source).toBe('recommended');
-      expect(result.workout).toBe(mockRecommendedWorkout);
-      expect(result.dayOfWeek).toBe(dayOfWeek);
-      expect(workoutsService.getWorkoutById).toHaveBeenCalledWith(
-        'workout-recommended-1',
-        userId,
-      );
-    });
-
-    it('Priority 2b: should return restDay when recommended plan marks today as rest day', async () => {
-      const { dayOfWeek, dateString } = service.resolveDayInTimezone('UTC');
-
-      prisma.customRoutineDayAssignment.findUnique.mockResolvedValue(null);
-
-      const mockPlanDay = {
-        id: 'plan-day-rest',
-        weeklyPlanId: 'week-1',
-        date: `${dateString}T00:00:00.000Z`,
-        workoutId: null,
-        isRestDay: true,
-        status: PlanDayStatus.UPCOMING,
-      };
-
-      planService.getPlanByWeek.mockResolvedValue({
-        id: 'week-1',
-        userId,
-        weekStartDate: '2026-09-21T00:00:00.000Z',
-        days: [mockPlanDay],
-      });
-
-      const result = await service.getTodayWorkout(userId, 'UTC');
-
-      expect(result.source).toBe('restDay');
-      expect(result.workout).toBeUndefined();
-      expect(workoutsService.getWorkoutById).not.toHaveBeenCalled();
-    });
-
-    it('Priority 3: should return none when user has no custom schedule and no recommended plan', async () => {
-      prisma.customRoutineDayAssignment.findUnique.mockResolvedValue(null);
-      planService.getPlanByWeek.mockRejectedValue(
-        new Error('User onboarding profile not found or incomplete'),
-      );
-
-      const result = await service.getTodayWorkout(userId, 'UTC');
-
-      expect(result.source).toBe('none');
-      expect(result.workout).toBeUndefined();
-    });
-
-    it('should fallback to recommended plan if custom workout was deleted/not found', async () => {
-      const { dayOfWeek, dateString } = service.resolveDayInTimezone('UTC');
-
-      prisma.customRoutineDayAssignment.findUnique.mockResolvedValue({
-        id: 'assign-deleted',
-        userId,
-        dayOfWeek,
-        workoutId: 'deleted-workout-id',
-        isRestDay: false,
-      });
-
-      workoutsService.getWorkoutById.mockRejectedValueOnce(
-        new Error('Workout not found'),
-      );
-
-      const mockPlanDay = {
-        id: 'plan-day-fallback',
-        weeklyPlanId: 'week-1',
-        date: `${dateString}T00:00:00.000Z`,
-        workoutId: 'fallback-workout-1',
-        isRestDay: false,
-        status: PlanDayStatus.UPCOMING,
-      };
-
-      planService.getPlanByWeek.mockResolvedValue({
-        id: 'week-1',
-        userId,
-        weekStartDate: '2026-09-21T00:00:00.000Z',
-        days: [mockPlanDay],
-      });
-
-      const mockFallbackWorkout: any = {
-        id: 'fallback-workout-1',
-        title: 'Fallback Workout',
-        exercises: [],
-      };
-      workoutsService.getWorkoutById.mockResolvedValueOnce(mockFallbackWorkout);
-
-      const result = await service.getTodayWorkout(userId, 'UTC');
-
-      expect(result.source).toBe('recommended');
-      expect(result.workout).toBe(mockFallbackWorkout);
+      expect(result.workout).toBe(workout);
       expect(result.targetDay).toBe('today');
       expect(result.isTodayCompleted).toBe(false);
     });
 
-    it('should rotate to tomorrow workout when today workout session is already completed', async () => {
-      const todayInfo = service.resolveDayInTimezone('UTC');
-      const tomorrowInfo = service.resolveDayInTimezone(
-        'UTC',
-        new Date(Date.now() + 24 * 60 * 60 * 1000),
+    it('should map PRESET_GENERATED workout days to source recommended', async () => {
+      const workout: any = { id: 'w-preset', title: 'Fuerza' };
+      planService.getPlanState.mockResolvedValue(
+        baseState({
+          date: '2026-09-28',
+          dayOfWeek: DayOfWeek.MONDAY,
+          status: 'workout',
+          targetDay: 'today',
+          isTodayCompleted: false,
+          workout,
+          origin: ScheduleOrigin.PRESET_GENERATED,
+          timezone: 'UTC',
+        }),
       );
 
-      // Simulate a completed session today
-      prisma.workoutSession.findMany.mockResolvedValue([
-        {
-          id: 'session-completed-today',
-          userId,
-          status: 'COMPLETED',
-          date: new Date(`${todayInfo.dateString}T10:00:00.000Z`),
-        },
-      ]);
+      const result = await service.getTodayWorkout(userId, 'UTC');
 
-      // Tomorrow has a custom assignment
-      prisma.customRoutineDayAssignment.findUnique.mockImplementation(
-        async ({ where }: any) => {
-          if (where.userId_dayOfWeek.dayOfWeek === tomorrowInfo.dayOfWeek) {
-            return {
-              id: 'assign-tomorrow',
-              userId,
-              dayOfWeek: tomorrowInfo.dayOfWeek,
-              workoutId: 'workout-tomorrow-id',
-              isRestDay: false,
-            };
-          }
-          return null;
-        },
+      expect(result.source).toBe('recommended');
+      expect(result.workout).toBe(workout);
+    });
+
+    it('should map rest days to source restDay and unassigned/none to none', async () => {
+      planService.getPlanState.mockResolvedValue(
+        baseState({
+          date: '2026-09-28',
+          dayOfWeek: DayOfWeek.SUNDAY,
+          status: 'rest',
+          targetDay: 'today',
+          isTodayCompleted: false,
+          workout: null,
+          origin: null,
+          timezone: 'UTC',
+        }),
       );
+      expect((await service.getTodayWorkout(userId)).source).toBe('restDay');
 
-      const mockTomorrowWorkout: any = {
-        id: 'workout-tomorrow-id',
-        title: 'Tomorrow Workout Power',
-        exercises: [],
-      };
-      workoutsService.getWorkoutById.mockResolvedValue(mockTomorrowWorkout);
+      planService.getPlanState.mockResolvedValue(
+        baseState({
+          date: '2026-09-28',
+          dayOfWeek: DayOfWeek.SUNDAY,
+          status: 'unassigned',
+          targetDay: 'today',
+          isTodayCompleted: false,
+          workout: null,
+          origin: null,
+          timezone: 'UTC',
+        }),
+      );
+      expect((await service.getTodayWorkout(userId)).source).toBe('none');
+
+      planService.getPlanState.mockResolvedValue({
+        state: 'none',
+        plan: null,
+        schedule: [],
+        today: {
+          date: '2026-09-28',
+          dayOfWeek: DayOfWeek.SUNDAY,
+          status: 'none',
+          targetDay: 'today',
+          isTodayCompleted: false,
+          workout: null,
+          origin: null,
+          timezone: 'UTC',
+        },
+      });
+      const noneResult = await service.getTodayWorkout(userId);
+      expect(noneResult.source).toBe('none');
+      expect(noneResult.workout).toBeUndefined();
+    });
+
+    it('should pass through tomorrow rotation from plan state', async () => {
+      const workout: any = { id: 'w-tomorrow', title: 'Mañana' };
+      planService.getPlanState.mockResolvedValue(
+        baseState({
+          date: '2026-09-29',
+          dayOfWeek: DayOfWeek.TUESDAY,
+          status: 'workout',
+          targetDay: 'tomorrow',
+          isTodayCompleted: true,
+          workout,
+          origin: ScheduleOrigin.MANUAL,
+          timezone: 'UTC',
+        }),
+      );
 
       const result = await service.getTodayWorkout(userId, 'UTC');
 
       expect(result.targetDay).toBe('tomorrow');
       expect(result.isTodayCompleted).toBe(true);
       expect(result.source).toBe('custom');
-      expect(result.dayOfWeek).toBe(tomorrowInfo.dayOfWeek);
-      expect(result.workout).toBe(mockTomorrowWorkout);
+      expect(result.dayOfWeek).toBe(DayOfWeek.TUESDAY);
     });
   });
 });

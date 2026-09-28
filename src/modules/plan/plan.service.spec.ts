@@ -1,9 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  NotFoundException,
+  ForbiddenException,
+  ConflictException,
+} from '@nestjs/common';
 import { PlanService } from './plan.service';
 import { PlanRepository } from './repositories/plan.repository';
 import { WorkoutsRepository } from '../workouts/repositories/workouts.repository';
+import { WorkoutsService } from '../workouts/workouts.service';
 import { RecommendationService } from '../recommendation/recommendation.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { PlanDayStatus } from '@prisma/client';
 import { getMondayOfWeek, addDaysUTC } from './utils/date.utils';
 
@@ -62,16 +68,43 @@ describe('PlanService', () => {
       findById: jest.fn(),
     };
 
+    const mockWorkoutsService = {
+      getWorkoutById: jest.fn(),
+    };
+
+    const mockPrismaService = {
+      program: { findUnique: jest.fn() },
+      userPlan: { findUnique: jest.fn(), upsert: jest.fn() },
+      user: { findUnique: jest.fn(), update: jest.fn() },
+      goal: { findFirst: jest.fn(), create: jest.fn() },
+      weightEntry: { findFirst: jest.fn() },
+      onboardingProfile: { findUnique: jest.fn() },
+      weeklyPlan: { findFirst: jest.fn() },
+      customRoutineDayAssignment: {
+        findMany: jest.fn(),
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+        upsert: jest.fn(),
+      },
+      workout: { findUnique: jest.fn() },
+      workoutSession: { findMany: jest.fn() },
+      $transaction: jest.fn(async (cb: any) => cb(mockPrismaService)),
+    };
+
     const mockRecommendationService = {
       generateWeeklyPlan: jest.fn(),
       resolveExerciseForUser: jest.fn(),
+      resolveBlueprint: jest.fn(),
+      persistBlueprint: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlanService,
+        { provide: PrismaService, useValue: mockPrismaService },
         { provide: PlanRepository, useValue: mockPlanRepo },
         { provide: WorkoutsRepository, useValue: mockWorkoutsRepo },
+        { provide: WorkoutsService, useValue: mockWorkoutsService },
         { provide: RecommendationService, useValue: mockRecommendationService },
       ],
     }).compile();
@@ -129,26 +162,15 @@ describe('PlanService', () => {
   });
 
   describe('updatePlanDay', () => {
-    it('should update workoutId and set isRestDay: false for plan owner', async () => {
+    it('should reject workout assignment changes with 409 (single-writer rule)', async () => {
       planRepo.findPlanDayById.mockResolvedValue(mockPlanDay as any);
-      workoutsRepo.findById.mockResolvedValue(mockPlanDay.workout as any);
-      planRepo.updatePlanDay.mockResolvedValue({
-        ...mockPlanDay,
-        workoutId: 'new-workout-id',
-        isRestDay: false,
-      } as any);
 
-      const result = await service.updatePlanDay(mockPlanDay.id, userId, {
-        workoutId: 'new-workout-id',
-      });
-
-      expect(workoutsRepo.findById).toHaveBeenCalledWith('new-workout-id');
-      expect(planRepo.updatePlanDay).toHaveBeenCalledWith(mockPlanDay.id, {
-        workoutId: 'new-workout-id',
-        isRestDay: false,
-      });
-      expect(result.workoutId).toBe('new-workout-id');
-      expect(result.isRestDay).toBe(false);
+      await expect(
+        service.updatePlanDay(mockPlanDay.id, userId, {
+          workoutId: 'new-workout-id',
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(planRepo.updatePlanDay).not.toHaveBeenCalled();
     });
 
     it('should throw ForbiddenException if user is not the owner', async () => {
@@ -169,7 +191,7 @@ describe('PlanService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should throw NotFoundException if assigned workoutId does not exist', async () => {
+    it('should throw ConflictException (not NotFound) when the workoutId differs, even if it does not exist', async () => {
       planRepo.findPlanDayById.mockResolvedValue(mockPlanDay as any);
       workoutsRepo.findById.mockResolvedValue(null);
 
@@ -177,7 +199,7 @@ describe('PlanService', () => {
         service.updatePlanDay(mockPlanDay.id, userId, {
           workoutId: 'non-existent-workout',
         }),
-      ).rejects.toThrow(NotFoundException);
+      ).rejects.toThrow(ConflictException);
     });
   });
 });

@@ -3,21 +3,26 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   GoalType,
+  PlanType,
+  Prisma,
   ProgramCategory,
   ProgramLevel,
   ExperienceLevel,
   MuscleGroup,
   PlanDayStatus,
+  ScheduleOrigin,
   WeeklyPlan,
   PlanDay,
   Workout,
   Program,
 } from '@prisma/client';
 import { addDaysUTC } from '../plan/utils/date.utils';
+import { DAYS_OF_WEEK_ORDER } from '../plan/utils/date.utils';
 
 export interface ResolvedExercise {
   id: string;
@@ -91,6 +96,40 @@ export type WeeklyPlanWithDaysAndWorkouts = WeeklyPlan & {
   program?: Program | null;
 };
 
+/**
+ * Pure read-side result of plan resolution (Fase 2 consistency).
+ * No database writes happen in `resolveBlueprint`; persistence goes through
+ * `persistBlueprint` inside a caller-owned transaction so assignPlan can
+ * atomically include UserPlan/Goal/schedule writes.
+ */
+export interface PlanBlueprint {
+  goal: GoalType;
+  experienceLevel: ExperienceLevel;
+  workoutDaysPerWeek: number;
+  chosenProgram: Program & { workouts: Workout[] };
+  weekNumber: number;
+  totalWeeks: number;
+  programStartDate: Date;
+  planDaysData: {
+    date: Date;
+    workoutId: string | null;
+    isRestDay: boolean;
+    status: PlanDayStatus;
+  }[];
+}
+
+export interface PersistBlueprintOptions {
+  /** Canonical plan row to upsert. null = leave UserPlan untouched. */
+  userPlan: { planType: PlanType; programId: string | null } | null;
+  /** Origin stamped on the rewritten schedule rows (single-writer audit). */
+  scheduleOrigin: ScheduleOrigin;
+  /** Force user program sync even when the program did not change (re-enroll). */
+  forceProgramSync?: boolean;
+}
+
+/** Transaction-capable Prisma client (PrismaService or interactive-tx client). */
+export type BlueprintDbClient = Prisma.TransactionClient;
+
 @Injectable()
 export class RecommendationService {
   private readonly logger = new Logger(RecommendationService.name);
@@ -100,12 +139,58 @@ export class RecommendationService {
   /**
    * Generates a tailored 7-day WeeklyPlan with PlanDays for a user based on their
    * OnboardingProfile and equipment preferences.
+   *
+   * Fase 2 consistency: every generated week also rewrites the SINGLE weekly
+   * schedule (CustomRoutineDayAssignment) and upserts the canonical UserPlan row
+   * in the same transaction (single writer). Users with an active CUSTOM plan
+   * are rejected here: their schedule is hand-assembled and must only change
+   * through manual edits (PlanService.upsertCustomScheduleDay).
    */
   async generateWeeklyPlan(
     userId: string,
     weekStartDate: Date,
     overrideProgramId?: string,
   ): Promise<WeeklyPlanWithDaysAndWorkouts> {
+    const blueprint = await this.resolveBlueprint(
+      userId,
+      weekStartDate,
+      overrideProgramId,
+    );
+
+    if (!overrideProgramId) {
+      const activePlan = await this.prisma.userPlan.findUnique({
+        where: { userId },
+      });
+      if (activePlan?.planType === PlanType.CUSTOM) {
+        throw new ConflictException(
+          'User has an active custom plan: the weekly schedule is hand-assembled and cannot be regenerated. Edit it day by day instead.',
+        );
+      }
+    }
+
+    return this.prisma.$transaction((tx) =>
+      this.persistBlueprint(tx, userId, weekStartDate, blueprint, {
+        userPlan: {
+          planType: PlanType.PRESET,
+          programId: blueprint.chosenProgram.id,
+        },
+        scheduleOrigin: ScheduleOrigin.PRESET_GENERATED,
+        forceProgramSync: overrideProgramId != null,
+      }),
+    );
+  }
+
+  /**
+   * Read-only half of plan generation: resolves profile, program (override ->
+   * active -> goal/level match), week progression and the 7-day distribution.
+   * Performs zero writes, so callers can embed persistence in their own
+   * transaction (see PlanService.assignPlan).
+   */
+  async resolveBlueprint(
+    userId: string,
+    weekStartDate: Date,
+    overrideProgramId?: string,
+  ): Promise<PlanBlueprint> {
     // 1. Fetch user OnboardingProfile & user entity
     const profile = await this.prisma.onboardingProfile.findUnique({
       where: { userId },
@@ -162,7 +247,10 @@ export class RecommendationService {
           orderBy: { title: 'asc' },
         });
 
-        if (programs.length > 0 && programs.some((p) => p.workouts.length > 0)) {
+        if (
+          programs.length > 0 &&
+          programs.some((p) => p.workouts.length > 0)
+        ) {
           matchedPrograms = programs;
           if (level !== fallbackLevels[0]) {
             this.logger.warn(
@@ -228,8 +316,12 @@ export class RecommendationService {
       ? weekStartDate
       : (user?.programStartDate ?? weekStartDate);
 
-    const diffMs = weekStartDate.getTime() - new Date(programStartDate).getTime();
-    const elapsedWeeks = Math.max(0, Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)));
+    const diffMs =
+      weekStartDate.getTime() - new Date(programStartDate).getTime();
+    const elapsedWeeks = Math.max(
+      0,
+      Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)),
+    );
     const totalWeeks = chosenProgram.durationWeeks ?? 12;
     const weekNumber = Math.max(1, Math.min(totalWeeks, elapsedWeeks + 1));
 
@@ -280,64 +372,129 @@ export class RecommendationService {
       }
     }
 
-    // 7. Transactionally persist WeeklyPlan and PlanDays, and sync User program state
-    return this.prisma.$transaction(async (tx) => {
-      // Sync user current program if newly assigned or overridden
-      if (
-        tx.user?.update &&
-        (overrideProgramId || !user?.currentProgramId || user.currentProgramId !== chosenProgram.id)
-      ) {
-        await tx.user.update({
-          where: { id: userId },
-          data: {
-            currentProgramId: chosenProgram.id,
-            programStartDate: overrideProgramId
-              ? weekStartDate
-              : (user?.programStartDate ?? weekStartDate),
-          },
-        });
-      }
+    // 7. Return the resolved blueprint; the caller persists it transactionally.
+    return {
+      goal: profile.goal,
+      experienceLevel: profile.experienceLevel,
+      workoutDaysPerWeek: profile.workoutDaysPerWeek,
+      chosenProgram,
+      weekNumber,
+      totalWeeks,
+      programStartDate:
+        overrideProgramId != null
+          ? weekStartDate
+          : (user?.programStartDate ?? weekStartDate),
+      planDaysData,
+    };
+  }
 
-      const existingPlan = await tx.weeklyPlan.findFirst({
-        where: {
-          userId,
-          weekStartDate,
-        },
-      });
+  /**
+   * Write half of plan generation. Persists, on the caller-provided transaction
+   * client: user program sync, WeeklyPlan + PlanDays (replacing the requested
+   * week), the canonical UserPlan row and the SINGLE weekly schedule rewrite.
+   * Must only run inside a transaction owned by generateWeeklyPlan/assignPlan.
+   */
+  async persistBlueprint(
+    db: BlueprintDbClient,
+    userId: string,
+    weekStartDate: Date,
+    blueprint: PlanBlueprint,
+    opts: PersistBlueprintOptions,
+  ): Promise<WeeklyPlanWithDaysAndWorkouts> {
+    const { chosenProgram, weekNumber, totalWeeks, planDaysData } = blueprint;
 
-      if (existingPlan) {
-        await tx.planDay.deleteMany({
-          where: { weeklyPlanId: existingPlan.id },
-        });
-        await tx.weeklyPlan.delete({
-          where: { id: existingPlan.id },
-        });
-      }
-
-      return tx.weeklyPlan.create({
+    // Sync user current program if newly assigned, changed, or forced (re-enroll)
+    const currentUser = await db.user.findUnique({ where: { id: userId } });
+    if (
+      opts.forceProgramSync ||
+      !currentUser?.currentProgramId ||
+      currentUser.currentProgramId !== chosenProgram.id
+    ) {
+      await db.user.update({
+        where: { id: userId },
         data: {
-          userId,
-          weekStartDate,
-          programId: chosenProgram.id,
-          weekNumber,
-          totalWeeks,
-          days: {
-            create: planDaysData,
-          },
-        },
-        include: {
-          program: true,
-          days: {
-            include: {
-              workout: true,
-            },
-            orderBy: {
-              date: 'asc',
-            },
-          },
+          currentProgramId: chosenProgram.id,
+          programStartDate: blueprint.programStartDate,
         },
       });
+    }
+
+    if (opts.userPlan) {
+      await db.userPlan.upsert({
+        where: { userId },
+        create: {
+          userId,
+          planType: opts.userPlan.planType,
+          programId: opts.userPlan.programId,
+          goal: blueprint.goal,
+          startedAt: blueprint.programStartDate,
+        },
+        update: {
+          planType: opts.userPlan.planType,
+          programId: opts.userPlan.programId,
+          goal: blueprint.goal,
+          startedAt: blueprint.programStartDate,
+        },
+      });
+    }
+
+    const existingPlan = await db.weeklyPlan.findFirst({
+      where: {
+        userId,
+        weekStartDate,
+      },
     });
+
+    if (existingPlan) {
+      await db.planDay.deleteMany({
+        where: { weeklyPlanId: existingPlan.id },
+      });
+      await db.weeklyPlan.delete({
+        where: { id: existingPlan.id },
+      });
+    }
+
+    const created = await db.weeklyPlan.create({
+      data: {
+        userId,
+        weekStartDate,
+        programId: chosenProgram.id,
+        weekNumber,
+        totalWeeks,
+        days: {
+          create: planDaysData,
+        },
+      },
+      include: {
+        program: true,
+        days: {
+          include: {
+            workout: true,
+          },
+          orderBy: {
+            date: 'asc',
+          },
+        },
+      },
+    });
+
+    // Single-writer schedule rewrite: the materialized weekly schedule ALWAYS
+    // mirrors the generated week. Manual edits are only possible on CUSTOM plans
+    // (PlanService.upsertCustomScheduleDay), which never reach this path.
+    await db.customRoutineDayAssignment.deleteMany({ where: { userId } });
+    if (planDaysData.length > 0) {
+      await db.customRoutineDayAssignment.createMany({
+        data: planDaysData.map((day, dayIndex) => ({
+          userId,
+          dayOfWeek: DAYS_OF_WEEK_ORDER[dayIndex % 7],
+          workoutId: day.workoutId,
+          isRestDay: day.isRestDay,
+          origin: opts.scheduleOrigin,
+        })),
+      });
+    }
+
+    return created;
   }
 
   /**
@@ -441,7 +598,10 @@ export class RecommendationService {
       }
     }
 
-    const personalization = await this.calculatePersonalization(userId, chosenExercise);
+    const personalization = await this.calculatePersonalization(
+      userId,
+      chosenExercise,
+    );
 
     return {
       id: chosenExercise.id,
@@ -449,11 +609,13 @@ export class RecommendationService {
       order: exercise.order, // Preserve original position in workout
       kind: chosenExercise.kind,
       imageAssetName: chosenExercise.imageAssetName,
-      videoUrl: chosenExercise.videoUrl ?? chosenExercise.catalogItem?.videoUrl ?? null,
-      imageUrl: chosenExercise.imageUrl ?? chosenExercise.catalogItem?.imageUrl ?? null,
+      videoUrl:
+        chosenExercise.videoUrl ?? chosenExercise.catalogItem?.videoUrl ?? null,
+      imageUrl:
+        chosenExercise.imageUrl ?? chosenExercise.catalogItem?.imageUrl ?? null,
       instructions: chosenExercise.instructions?.length
         ? chosenExercise.instructions
-        : chosenExercise.catalogItem?.instructions ?? [],
+        : (chosenExercise.catalogItem?.instructions ?? []),
       primaryMuscleGroup: chosenExercise.primaryMuscleGroup,
       requiredEquipmentId: chosenExercise.requiredEquipmentId,
       substitutionGroupId: chosenExercise.substitutionGroupId,
@@ -477,7 +639,12 @@ export class RecommendationService {
   private async calculatePersonalization(userId: string, exercise: any) {
     let profile: any = null;
     let progress: any = null;
-    let pr: { weightKg: number; reps: number; date: string; estimated1RM: number } | null = null;
+    let pr: {
+      weightKg: number;
+      reps: number;
+      date: string;
+      estimated1RM: number;
+    } | null = null;
 
     try {
       if (this.prisma.onboardingProfile?.findUnique) {
@@ -561,7 +728,10 @@ export class RecommendationService {
     if (progress?.suggestedNextWeightKg && progress.suggestedNextWeightKg > 0) {
       suggestedWeightKg = Number(progress.suggestedNextWeightKg);
       suggestedWeightLabel = `${progress.currentWorkingWeightKg}->${progress.suggestedNextWeightKg} kg`;
-    } else if (progress?.currentWorkingWeightKg && progress.currentWorkingWeightKg > 0) {
+    } else if (
+      progress?.currentWorkingWeightKg &&
+      progress.currentWorkingWeightKg > 0
+    ) {
       suggestedWeightKg = Number(progress.currentWorkingWeightKg);
       suggestedWeightLabel = `${progress.currentWorkingWeightKg} kg`;
     } else {

@@ -49,7 +49,8 @@ export class CustomScheduleController {
 
   @Put(':dayOfWeek')
   @ApiOperation({
-    summary: 'Upsert the routine or rest assignment for a specific day of the week',
+    summary:
+      'Upsert the routine or rest assignment for a specific day of the week',
     description:
       'Assigns a custom workout or rest day to the specified weekday. Accepts { workoutId } or { isRestDay: true }. Rejects with 400 if both or neither are provided, or if workoutId does not belong to the user.',
   })

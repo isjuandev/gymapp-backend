@@ -5,15 +5,14 @@ import { CreateProgramDto } from './dto/create-program.dto';
 import { UpdateProgramDto } from './dto/update-program.dto';
 import { ProgramResponseDto } from './dto/program-response.dto';
 import { ProgramDetailResponseDto } from './dto/program-detail-response.dto';
-import { RecommendationService } from '../recommendation/recommendation.service';
+import { PlanService } from '../plan/plan.service';
 import { WeeklyPlanResponseDto } from '../plan/dto/weekly-plan-response.dto';
-import { getMondayOfWeek } from '../plan/utils/date.utils';
 
 @Injectable()
 export class ProgramsService {
   constructor(
     private readonly programsRepository: ProgramsRepository,
-    private readonly recommendationService: RecommendationService,
+    private readonly planService: PlanService,
   ) {}
 
   async getAllPrograms(
@@ -42,14 +41,9 @@ export class ProgramsService {
       throw new NotFoundException(`Program with ID '${programId}' not found`);
     }
 
-    const monday = getMondayOfWeek(new Date());
-    const weeklyPlan = await this.recommendationService.generateWeeklyPlan(
-      userId,
-      monday,
-      programId,
-    );
-
-    return WeeklyPlanResponseDto.fromEntityWithDays(weeklyPlan);
+    // Single-writer preset assignment (canonical plan + schedule + goals).
+    const { weeklyPlan } = await this.planService.assignPlan(userId, programId);
+    return weeklyPlan;
   }
 
   async createProgram(dto: CreateProgramDto): Promise<ProgramResponseDto> {

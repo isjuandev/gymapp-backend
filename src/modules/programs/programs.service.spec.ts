@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { ProgramsService } from './programs.service';
 import { ProgramsRepository } from './repositories/programs.repository';
-import { RecommendationService } from '../recommendation/recommendation.service';
+import { PlanService } from '../plan/plan.service';
 import {
   Program,
   ProgramCategory,
@@ -50,14 +50,14 @@ describe('ProgramsService', () => {
     };
 
     mockRecommendationService = {
-      generateWeeklyPlan: jest.fn(),
+      assignPlan: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProgramsService,
         { provide: ProgramsRepository, useValue: mockRepo },
-        { provide: RecommendationService, useValue: mockRecommendationService },
+        { provide: PlanService, useValue: mockRecommendationService },
       ],
     }).compile();
 
@@ -169,7 +169,7 @@ describe('ProgramsService', () => {
   });
 
   describe('enrollInProgram', () => {
-    it('should enroll user and return generated weekly plan', async () => {
+    it('should enroll user via single-writer assignPlan and return generated weekly plan', async () => {
       repository.findById.mockResolvedValue(mockProgram);
       const mockWeeklyPlan = {
         id: 'plan-1',
@@ -181,15 +181,19 @@ describe('ProgramsService', () => {
         program: mockProgram,
         days: [],
       };
-      mockRecommendationService.generateWeeklyPlan.mockResolvedValue(mockWeeklyPlan);
+      mockRecommendationService.assignPlan.mockResolvedValue({
+        state: { state: 'active' },
+        weeklyPlan: mockWeeklyPlan,
+      });
 
       const result = await service.enrollInProgram('user-1', mockProgram.id);
 
       expect(repository.findById).toHaveBeenCalledWith(mockProgram.id);
-      expect(mockRecommendationService.generateWeeklyPlan).toHaveBeenCalled();
-      expect(result.currentWeekNumber).toBe(1);
-      expect(result.totalWeeks).toBe(8);
-      expect(result.programId).toBe(mockProgram.id);
+      expect(mockRecommendationService.assignPlan).toHaveBeenCalledWith(
+        'user-1',
+        mockProgram.id,
+      );
+      expect(result).toBe(mockWeeklyPlan);
     });
 
     it('should throw NotFoundException when enrolling in non-existent program', async () => {

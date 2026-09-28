@@ -41,7 +41,8 @@ export class ProgramsController {
   @ApiBearerAuth('JWT-auth')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Enroll current user into a program and generate active weekly plan',
+    summary:
+      'Enroll current user into a program and generate active weekly plan',
     description:
       'Sets user currentProgramId, sets programStartDate to current week Monday, and regenerates current weekly plan.',
   })

@@ -19,6 +19,7 @@ import { AscendApiModule } from './modules/ascend-api/ascend-api.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { CustomScheduleModule } from './modules/custom-schedule/custom-schedule.module';
 import { HomeModule } from './modules/home/home.module';
+import { AdminModule } from './modules/admin/admin.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { HomeModule } from './modules/home/home.module';
     CatalogModule,
     CustomScheduleModule,
     HomeModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],

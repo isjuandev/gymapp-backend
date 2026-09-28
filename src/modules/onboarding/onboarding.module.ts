@@ -4,10 +4,10 @@ import { OnboardingService } from './onboarding.service';
 import { OnboardingRepository } from './repositories/onboarding.repository';
 import { AuthModule } from '../auth/auth.module';
 import { EquipmentModule } from '../equipment/equipment.module';
-import { RecommendationModule } from '../recommendation/recommendation.module';
+import { PlanModule } from '../plan/plan.module';
 
 @Module({
-  imports: [AuthModule, EquipmentModule, RecommendationModule],
+  imports: [AuthModule, EquipmentModule, PlanModule],
   controllers: [OnboardingController],
   providers: [OnboardingService, OnboardingRepository],
   exports: [OnboardingService, OnboardingRepository],

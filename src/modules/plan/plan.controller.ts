@@ -6,8 +6,10 @@ import {
   Param,
   Body,
   Query,
+  Headers,
   UseGuards,
   HttpStatus,
+  HttpCode,
   ParseUUIDPipe,
 } from '@nestjs/common';
 import {
@@ -15,12 +17,15 @@ import {
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
+  ApiHeader,
 } from '@nestjs/swagger';
 import { PlanService } from './plan.service';
 import { PlanQueryDto } from './dto/plan-query.dto';
 import { UpdatePlanDayDto } from './dto/update-plan-day.dto';
 import { WeeklyPlanResponseDto } from './dto/weekly-plan-response.dto';
 import { PlanDayResponseDto } from './dto/plan-day-response.dto';
+import { PlanStateResponseDto } from './dto/plan-state-response.dto';
+import { AssignPlanDto } from './dto/assign-plan.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
@@ -82,6 +87,50 @@ export class PlanController {
     @Query() query: PlanQueryDto,
   ): Promise<WeeklyPlanResponseDto> {
     return this.planService.regenerateWeeklyPlan(userId, query.weekStartDate);
+  }
+
+  @Get('state')
+  @ApiOperation({
+    summary: 'Single canonical plan/week/today state (Fase 2 consistency)',
+    description:
+      'One read model for ALL screens (Home, Mi Plan, Mis Rutinas > Horario, tab Plan): active plan metadata, materialized 7-day schedule and today card derived ONLY from that schedule. No active plan returns HTTP 200 with state "none" (never 404): clients show the pick-a-plan CTA.',
+  })
+  @ApiHeader({
+    name: 'X-Timezone',
+    required: false,
+    description:
+      'User IANA timezone identifier (e.g. America/Bogota, Europe/Madrid). Defaults to UTC if omitted or invalid.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Canonical plan state',
+    type: PlanStateResponseDto,
+  })
+  async getState(
+    @CurrentUser('userId') userId: string,
+    @Headers('x-timezone') timezoneHeader?: string,
+  ): Promise<PlanStateResponseDto> {
+    return this.planService.getPlanState(userId, timezoneHeader);
+  }
+
+  @Post('assign')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Assign a preset plan (change plan) in one transaction',
+    description:
+      'Single writer for preset plans: fixes the canonical UserPlan row, aligns User goal + Goal rows (nutritional objective), regenerates the WeeklyPlan and rewrites the single schedule. Replaces the derived schedule but never deletes the workout library or history.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Assigned plan state',
+    type: PlanStateResponseDto,
+  })
+  async assign(
+    @CurrentUser('userId') userId: string,
+    @Body() dto: AssignPlanDto,
+  ): Promise<PlanStateResponseDto> {
+    const { state } = await this.planService.assignPlan(userId, dto.programId);
+    return state;
   }
 
   @Patch('days/:planDayId')

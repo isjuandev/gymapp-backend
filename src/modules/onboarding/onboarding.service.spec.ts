@@ -3,7 +3,7 @@ import { NotFoundException } from '@nestjs/common';
 import { OnboardingService } from './onboarding.service';
 import { OnboardingRepository } from './repositories/onboarding.repository';
 import { EquipmentRepository } from '../equipment/repositories/equipment.repository';
-import { RecommendationService } from '../recommendation/recommendation.service';
+import { PlanService } from '../plan/plan.service';
 import { ExperienceLevel, GoalType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -11,7 +11,7 @@ describe('OnboardingService', () => {
   let service: OnboardingService;
   let onboardingRepo: jest.Mocked<OnboardingRepository>;
   let equipmentRepo: jest.Mocked<EquipmentRepository>;
-  let recommendationService: jest.Mocked<RecommendationService>;
+  let planService: jest.Mocked<PlanService>;
 
   const userId = 'user-uuid-1111';
   const equipmentId = '88888888-8888-4888-8888-888888888881';
@@ -37,14 +37,19 @@ describe('OnboardingService', () => {
     };
 
     const mockRecommendationService = {
-      generateWeeklyPlan: jest.fn().mockResolvedValue({} as any),
-      resolveExerciseForUser: jest.fn(),
+      assignPlan: jest.fn().mockResolvedValue({} as any),
     };
 
     const mockPrismaService = {
       user: { update: jest.fn().mockResolvedValue({} as any) },
-      weightEntry: { create: jest.fn().mockResolvedValue({} as any) },
-      goal: { create: jest.fn().mockResolvedValue({} as any) },
+      weightEntry: {
+        create: jest.fn().mockResolvedValue({} as any),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      goal: {
+        create: jest.fn().mockResolvedValue({} as any),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -52,7 +57,7 @@ describe('OnboardingService', () => {
         OnboardingService,
         { provide: OnboardingRepository, useValue: mockOnboardingRepo },
         { provide: EquipmentRepository, useValue: mockEquipmentRepo },
-        { provide: RecommendationService, useValue: mockRecommendationService },
+        { provide: PlanService, useValue: mockRecommendationService },
         { provide: PrismaService, useValue: mockPrismaService },
       ],
     }).compile();
@@ -60,7 +65,7 @@ describe('OnboardingService', () => {
     service = module.get<OnboardingService>(OnboardingService);
     onboardingRepo = module.get(OnboardingRepository);
     equipmentRepo = module.get(EquipmentRepository);
-    recommendationService = module.get(RecommendationService);
+    planService = module.get(PlanService);
   });
 
   describe('getProfile', () => {
@@ -127,10 +132,7 @@ describe('OnboardingService', () => {
           completedAt: expect.any(Date),
         }),
       );
-      expect(recommendationService.generateWeeklyPlan).toHaveBeenCalledWith(
-        userId,
-        expect.any(Date),
-      );
+      expect(planService.assignPlan).toHaveBeenCalledWith(userId);
       expect(result.id).toBe(mockProfile.id);
       expect(result.equipmentIds).toEqual([equipmentId]);
     });

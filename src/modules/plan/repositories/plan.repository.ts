@@ -1,6 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { PlanDay, PlanDayStatus, Program, WeeklyPlan, Workout } from '@prisma/client';
+import {
+  PlanDay,
+  PlanDayStatus,
+  Program,
+  WeeklyPlan,
+  Workout,
+} from '@prisma/client';
 import { UpdatePlanDayDto } from '../dto/update-plan-day.dto';
 
 export type WeeklyPlanWithDaysAndWorkout = WeeklyPlan & {

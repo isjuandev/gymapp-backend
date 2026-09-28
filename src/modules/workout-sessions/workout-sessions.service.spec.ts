@@ -8,6 +8,7 @@ import {
 import { WorkoutSessionsService } from './workout-sessions.service';
 import { WorkoutSessionsRepository } from './repositories/workout-sessions.repository';
 import { WorkoutsRepository } from '../workouts/repositories/workouts.repository';
+import { PrismaService } from '../../prisma/prisma.service';
 import { WorkoutSessionStatus } from '@prisma/client';
 
 describe('WorkoutSessionsService', () => {
@@ -88,11 +89,20 @@ describe('WorkoutSessionsService', () => {
       findByIdWithExercises: jest.fn(),
     };
 
+    const mockTx = {
+      goal: { findFirst: jest.fn().mockResolvedValue(null) },
+      weightEntry: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const mockPrismaService = {
+      $transaction: jest.fn(async (cb: any) => cb(mockTx)),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         WorkoutSessionsService,
         { provide: WorkoutSessionsRepository, useValue: mockSessionsRepo },
         { provide: WorkoutsRepository, useValue: mockWorkoutsRepo },
+        { provide: PrismaService, useValue: mockPrismaService },
       ],
     }).compile();
 
@@ -189,11 +199,15 @@ describe('WorkoutSessionsService', () => {
         avgHeartRate: 135,
       });
 
-      expect(sessionsRepo.completeSession).toHaveBeenCalledWith(sessionId, {
-        durationActualSeconds: 2700,
-        kcalBurned: 420,
-        avgHeartRate: 135,
-      });
+      expect(sessionsRepo.completeSession).toHaveBeenCalledWith(
+        sessionId,
+        {
+          durationActualSeconds: 2700,
+          kcalBurned: 420,
+          avgHeartRate: 135,
+        },
+        expect.anything(),
+      );
 
       // Consecutive should now be 2, and suggested next weight should be 40 + 2.5 = 42.5kg!
       expect(sessionsRepo.upsertProgressState).toHaveBeenCalledWith(
@@ -204,6 +218,7 @@ describe('WorkoutSessionsService', () => {
           consecutiveSessionsAtTarget: 2,
           suggestedNextWeightKg: 42.5,
         }),
+        expect.anything(),
       );
 
       expect(result.status).toBe(WorkoutSessionStatus.COMPLETED);
@@ -271,6 +286,7 @@ describe('WorkoutSessionsService', () => {
           durationActualSeconds: expect.any(Number),
           kcalBurned: 380,
         }),
+        expect.anything(),
       );
     });
 
@@ -546,6 +562,59 @@ describe('WorkoutSessionsService', () => {
         exerciseId,
         'Mantener escápulas retraídas',
       );
+    });
+  });
+
+  describe('completeSession single transaction (invariant 6)', () => {
+    it('should run session complete + progress sync + planday + goal refresh in ONE $transaction on the same tx client', async () => {
+      const mockPrisma: any = (service as any).prisma;
+      sessionsRepo.findById.mockResolvedValue(mockSession as any);
+      workoutsRepo.findByIdWithExercises.mockResolvedValue({
+        ...mockSession.workout,
+        exercises: [],
+      } as any);
+      sessionsRepo.findSetLogsBySessionId.mockResolvedValue([]);
+      sessionsRepo.completeSession.mockImplementation(
+        async (id: string, data: any, db: any) => ({
+          ...mockSession,
+          status: WorkoutSessionStatus.COMPLETED,
+          passedDb: db,
+        }),
+      );
+
+      const txGoal = { findFirst: jest.fn(), update: jest.fn() };
+      const txWeight = { findFirst: jest.fn() };
+      const txClient: any = { goal: txGoal, weightEntry: txWeight };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(txClient));
+
+      txGoal.findFirst.mockResolvedValue({
+        id: 'goal-1',
+        type: 'LOSE_WEIGHT',
+        currentValue: 80,
+      });
+      txWeight.findFirst.mockResolvedValue({ weightKg: 78 });
+
+      await service.completeSession(sessionId, userId, {
+        durationActualSeconds: 1800,
+        kcalBurned: 300,
+      });
+
+      // Exactly one transaction boundary...
+      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+      // ...and every write inside it ran on the SAME tx client.
+      const [[, , passedDb]] = sessionsRepo.completeSession.mock.calls;
+      expect(passedDb).toBe(txClient);
+      const upsertCall = sessionsRepo.upsertProgressState.mock.calls[0];
+      // No working sets logged -> no progress upserts, but planday still syncs on tx.
+      expect(upsertCall).toBeUndefined();
+      const [, , , plandayDb] =
+        sessionsRepo.updateMatchingPlanDayToCompleted.mock.calls[0];
+      expect(plandayDb).toBe(txClient);
+      // LOSE_WEIGHT goal refreshed from latest weight inside the tx.
+      expect(txGoal.update).toHaveBeenCalledWith({
+        where: { id: 'goal-1' },
+        data: { currentValue: 78 },
+      });
     });
   });
 });

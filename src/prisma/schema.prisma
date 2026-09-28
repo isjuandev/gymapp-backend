@@ -46,6 +46,20 @@ enum Gender {
   @@map("gender")
 }
 
+enum PlanType {
+  PRESET
+  CUSTOM
+
+  @@map("plan_type")
+}
+
+enum ScheduleOrigin {
+  PRESET_GENERATED
+  MANUAL
+
+  @@map("schedule_origin")
+}
+
 enum ProgramCategory {
   WEIGHT_LOSS
   MUSCLE_GAIN
@@ -198,6 +212,7 @@ model User {
   exerciseProgressStates   ExerciseProgressState[]
   customWorkouts           Workout[]
   customRoutineDayAssignments CustomRoutineDayAssignment[]
+  userPlan               UserPlan?
 
   @@map("users")
 }
@@ -216,6 +231,7 @@ model Program {
   workouts      Workout[]
   enrolledUsers User[]       @relation("UserCurrentProgram")
   weeklyPlans   WeeklyPlan[]
+  userPlans     UserPlan[]
 
   @@map("programs")
 }
@@ -610,11 +626,16 @@ model RefreshToken {
 }
 
 model CustomRoutineDayAssignment {
-  id        String    @id @default(uuid())
-  userId    String    @map("user_id")
-  dayOfWeek DayOfWeek @map("day_of_week")
-  workoutId String?   @map("workout_id")
-  isRestDay Boolean   @default(false) @map("is_rest_day")
+  id        String         @id @default(uuid())
+  userId    String         @map("user_id")
+  dayOfWeek DayOfWeek      @map("day_of_week")
+  workoutId String?        @map("workout_id")
+  isRestDay Boolean        @default(false) @map("is_rest_day")
+  // SINGLE weekly schedule of the user's ACTIVE plan (Fase 2 consistency).
+  // Only two writers allowed: PlanService.assignPlan (PRESET_GENERATED) and
+  // manual edits of a CUSTOM plan (MANUAL). Read by /plan/state, /home/today-workout
+  // and /custom-schedule. Never written by onboarding/enroll/regenerate directly.
+  origin    ScheduleOrigin @default(MANUAL) @map("origin")
 
   // Relations
   user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -624,4 +645,26 @@ model CustomRoutineDayAssignment {
   @@index([userId])
   @@index([workoutId])
   @@map("custom_routine_day_assignments")
+}
+
+// Canonical active plan of a user (Fase 2 consistency, invariant 4).
+// Exactly ONE row per user: type PRESET (generated from a Program template)
+// or CUSTOM (schedule assembled by hand in Mis Rutinas). The weekly schedule
+// (CustomRoutineDayAssignment) is ALWAYS derived from / kept in sync with this row.
+model UserPlan {
+  id          String    @id @default(uuid())
+  userId      String    @unique @map("user_id")
+  planType    PlanType  @map("plan_type")
+  programId   String?   @map("program_id")
+  goal        GoalType
+  startedAt   DateTime  @map("started_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  program Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
+
+  @@index([programId])
+  @@map("user_plans")
 }

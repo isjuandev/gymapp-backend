@@ -7,6 +7,7 @@ import {
   ExerciseProgressState,
   ExerciseSetLog,
   PlanDayStatus,
+  Prisma,
   Workout,
   WorkoutSession,
   WorkoutSessionStatus,
@@ -18,6 +19,13 @@ export interface CompleteSessionData {
   kcalBurned?: number | null;
   avgHeartRate?: number | null;
 }
+
+/**
+ * Database client usable inside or outside a transaction (Fase 2: the
+ * complete-session flow runs all its writes on one interactive transaction).
+ * PrismaService extends PrismaClient, so both expose the same delegates.
+ */
+export type SessionDbClient = Prisma.TransactionClient | PrismaService;
 
 export type ExerciseWithEquipmentDetails = Exercise & {
   requiredEquipment: Equipment | null;
@@ -48,8 +56,9 @@ export class WorkoutSessionsRepository {
 
   async findById(
     id: string,
+    db: SessionDbClient = this.prisma,
   ): Promise<(WorkoutSession & { workout: Workout | null }) | null> {
-    return this.prisma.workoutSession.findUnique({
+    return db.workoutSession.findUnique({
       where: { id },
       include: {
         workout: true,
@@ -82,8 +91,9 @@ export class WorkoutSessionsRepository {
   async completeSession(
     id: string,
     data: CompleteSessionData,
+    db: SessionDbClient = this.prisma,
   ): Promise<WorkoutSession & { workout: Workout | null }> {
-    return this.prisma.workoutSession.update({
+    return db.workoutSession.update({
       where: { id },
       data: {
         status: WorkoutSessionStatus.COMPLETED,
@@ -115,6 +125,7 @@ export class WorkoutSessionsRepository {
     userId: string,
     workoutId: string,
     sessionDate: Date,
+    db: SessionDbClient = this.prisma,
   ): Promise<void> {
     const startOfDay = new Date(sessionDate);
     startOfDay.setUTCHours(0, 0, 0, 0);
@@ -122,7 +133,7 @@ export class WorkoutSessionsRepository {
     const endOfDay = new Date(sessionDate);
     endOfDay.setUTCHours(23, 59, 59, 999);
 
-    const matchingPlanDay = await this.prisma.planDay.findFirst({
+    const matchingPlanDay = await db.planDay.findFirst({
       where: {
         workoutId,
         weeklyPlan: {
@@ -139,7 +150,7 @@ export class WorkoutSessionsRepository {
     });
 
     if (matchingPlanDay) {
-      await this.prisma.planDay.update({
+      await db.planDay.update({
         where: { id: matchingPlanDay.id },
         data: {
           status: PlanDayStatus.COMPLETED,
@@ -193,8 +204,11 @@ export class WorkoutSessionsRepository {
     });
   }
 
-  async findSetLogsBySessionId(sessionId: string): Promise<ExerciseSetLog[]> {
-    return this.prisma.exerciseSetLog.findMany({
+  async findSetLogsBySessionId(
+    sessionId: string,
+    db: SessionDbClient = this.prisma,
+  ): Promise<ExerciseSetLog[]> {
+    return db.exerciseSetLog.findMany({
       where: { workoutSessionId: sessionId },
       orderBy: [{ exerciseId: 'asc' }, { setNumber: 'asc' }],
     });
@@ -218,8 +232,9 @@ export class WorkoutSessionsRepository {
 
   async findExerciseWithDetails(
     exerciseId: string,
+    db: SessionDbClient = this.prisma,
   ): Promise<ExerciseWithEquipmentDetails | null> {
-    return this.prisma.exercise.findUnique({
+    return db.exercise.findUnique({
       where: { id: exerciseId },
       include: {
         requiredEquipment: true,
@@ -235,13 +250,14 @@ export class WorkoutSessionsRepository {
   async findExerciseInWorkout(
     workoutId: string,
     exerciseId: string,
+    db: SessionDbClient = this.prisma,
   ): Promise<ExerciseWithEquipmentDetails | null> {
-    const exercise = await this.findExerciseWithDetails(exerciseId);
+    const exercise = await this.findExerciseWithDetails(exerciseId, db);
     if (exercise && exercise.workoutId === workoutId) {
       return exercise;
     }
 
-    return this.prisma.exercise.findFirst({
+    return db.exercise.findFirst({
       where: {
         workoutId,
         OR: [
@@ -264,8 +280,9 @@ export class WorkoutSessionsRepository {
   async findProgressState(
     userId: string,
     exerciseId: string,
+    db: SessionDbClient = this.prisma,
   ): Promise<ExerciseProgressState | null> {
-    return this.prisma.exerciseProgressState.findUnique({
+    return db.exerciseProgressState.findUnique({
       where: {
         userId_exerciseId: {
           userId,
@@ -303,8 +320,9 @@ export class WorkoutSessionsRepository {
       suggestedNextWeightKg: number | null;
       lastSessionDate: Date;
     },
+    db: SessionDbClient = this.prisma,
   ): Promise<ExerciseProgressState> {
-    return this.prisma.exerciseProgressState.upsert({
+    return db.exerciseProgressState.upsert({
       where: {
         userId_exerciseId: {
           userId,
@@ -342,7 +360,11 @@ export class WorkoutSessionsRepository {
     });
   }
 
-  async updateExerciseNotes(userId: string, exerciseId: string, notes: string): Promise<ExerciseProgressState> {
+  async updateExerciseNotes(
+    userId: string,
+    exerciseId: string,
+    notes: string,
+  ): Promise<ExerciseProgressState> {
     return this.prisma.exerciseProgressState.upsert({
       where: {
         userId_exerciseId: {
@@ -363,4 +385,3 @@ export class WorkoutSessionsRepository {
     });
   }
 }
-

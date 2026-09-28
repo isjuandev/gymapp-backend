@@ -3,8 +3,7 @@ import { OnboardingProfile } from '@prisma/client';
 import { CompleteOnboardingDto, OnboardingProfileResponseDto } from './dto';
 import { OnboardingRepository } from './repositories/onboarding.repository';
 import { EquipmentRepository } from '../equipment/repositories/equipment.repository';
-import { RecommendationService } from '../recommendation/recommendation.service';
-import { getMondayOfWeek } from '../plan/utils/date.utils';
+import { PlanService } from '../plan/plan.service';
 
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -13,7 +12,7 @@ export class OnboardingService {
   constructor(
     private readonly onboardingRepository: OnboardingRepository,
     private readonly equipmentRepository: EquipmentRepository,
-    private readonly recommendationService: RecommendationService,
+    private readonly planService: PlanService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -68,32 +67,68 @@ export class OnboardingService {
       },
     });
 
-    // 4. If current weight was provided, record initial weight entry
+    // 4. If current weight was provided, record the initial weight entry
+    // (idempotent per calendar day: re-submitting onboarding does not stack rows)
+    // and ensure a goal row of this type exists (reused, never duplicated).
     if (dto.currentWeightKg) {
-      await this.prisma.weightEntry.create({
-        data: {
-          userId,
-          date: new Date(),
-          weightKg: dto.currentWeightKg,
-        },
+      const now = new Date();
+      const startOfDay = new Date(
+        Date.UTC(
+          now.getUTCFullYear(),
+          now.getUTCMonth(),
+          now.getUTCDate(),
+          0,
+          0,
+          0,
+          0,
+        ),
+      );
+      const endOfDay = new Date(
+        Date.UTC(
+          now.getUTCFullYear(),
+          now.getUTCMonth(),
+          now.getUTCDate(),
+          23,
+          59,
+          59,
+          999,
+        ),
+      );
+      const existingEntry = await this.prisma.weightEntry.findFirst({
+        where: { userId, date: { gte: startOfDay, lte: endOfDay } },
       });
-
-      if (dto.targetWeightKg) {
-        await this.prisma.goal.create({
+      if (!existingEntry) {
+        await this.prisma.weightEntry.create({
           data: {
             userId,
-            type: dto.goal,
-            targetValue: dto.targetWeightKg,
-            currentValue: dto.currentWeightKg,
-            deadline: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+            date: now,
+            weightKg: dto.currentWeightKg,
           },
         });
       }
+
+      if (dto.targetWeightKg) {
+        const existingGoal = await this.prisma.goal.findFirst({
+          where: { userId, type: dto.goal },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (!existingGoal) {
+          await this.prisma.goal.create({
+            data: {
+              userId,
+              type: dto.goal,
+              targetValue: dto.targetWeightKg,
+              currentValue: dto.currentWeightKg,
+              deadline: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+            },
+          });
+        }
+      }
     }
 
-    // 5. Trigger initial plan generation for the current week
-    const currentMonday = getMondayOfWeek(new Date());
-    await this.recommendationService.generateWeeklyPlan(userId, currentMonday);
+    // 5. Assign the initial PRESET plan (canonical UserPlan + WeeklyPlan +
+    //    single schedule rewrite + goal alignment, one transaction).
+    await this.planService.assignPlan(userId);
 
     return this.toResponseDto(profile, dto.equipmentIds);
   }
