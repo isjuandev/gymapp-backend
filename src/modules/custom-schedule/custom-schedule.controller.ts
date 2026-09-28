@@ -1,6 +1,9 @@
 import {
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Put,
   Body,
   Param,
@@ -89,6 +92,38 @@ export class CustomScheduleController {
       user.userId,
       normalizedDay,
       dto,
+    );
+  }
+
+  @Delete(':dayOfWeek')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Remove the routine/rest assignment for a weekday (back to unassigned)',
+    description:
+      'Deletes the schedule row so the day renders as unassigned. CUSTOM plans only: on PRESET plans it returns 409 (re-assign the preset plan instead).',
+  })
+  @ApiResponse({
+    status: HttpStatus.NO_CONTENT,
+    description: 'Day assignment removed',
+  })
+  @ApiResponse({
+    status: HttpStatus.CONFLICT,
+    description: 'Active plan is preset-derived',
+  })
+  async removeDaySchedule(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('dayOfWeek') rawDay: string,
+  ): Promise<void> {
+    const normalizedDay = rawDay.toUpperCase() as DayOfWeek;
+    if (!Object.values(DayOfWeek).includes(normalizedDay)) {
+      throw new BadRequestException(
+        `Invalid dayOfWeek '${rawDay}'. Must be one of: ${Object.values(DayOfWeek).join(', ')}`,
+      );
+    }
+
+    return this.customScheduleService.removeDaySchedule(
+      user.userId,
+      normalizedDay,
     );
   }
 }

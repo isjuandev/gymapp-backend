@@ -411,6 +411,33 @@ export class PlanService {
   }
 
   /**
+   * Removes a manual day assignment (back to unassigned). Only meaningful on
+   * CUSTOM plans; on PRESET plans it would fork the schedule away from the
+   * template, so it is rejected (re-assign the preset plan instead).
+   */
+  async removeCustomScheduleDay(
+    userId: string,
+    dayOfWeek: DayOfWeek,
+  ): Promise<void> {
+    const activePlan = await this.prisma.userPlan.findUnique({
+      where: { userId },
+    });
+    if (!activePlan) {
+      throw new NotFoundException(
+        'User has no active plan: nothing to unassign',
+      );
+    }
+    if (activePlan.planType === PlanType.PRESET) {
+      throw new ConflictException(
+        'Preset schedules are derived from the program template: assign another preset plan or switch to a custom plan instead of removing days.',
+      );
+    }
+    await this.prisma.customRoutineDayAssignment.deleteMany({
+      where: { userId, dayOfWeek },
+    });
+  }
+
+  /**
    * Reads the materialized 7-day schedule (shared by /plan/state,
    * /custom-schedule and the integrity checker). Never writes.
    */

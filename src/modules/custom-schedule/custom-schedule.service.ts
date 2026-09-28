@@ -39,4 +39,14 @@ export class CustomScheduleService {
   ): Promise<CustomScheduleDayDto> {
     return this.planService.upsertCustomScheduleDay(userId, dayOfWeek, dto);
   }
+
+  /**
+   * Removes a manual day assignment (back to unassigned). CUSTOM plans only.
+   */
+  async removeDaySchedule(
+    userId: string,
+    dayOfWeek: DayOfWeek,
+  ): Promise<void> {
+    return this.planService.removeCustomScheduleDay(userId, dayOfWeek);
+  }
 }
