@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  NotFoundException,
+  forwardRef,
+} from '@nestjs/common';
 import { ProgramsRepository } from './repositories/programs.repository';
 import { ProgramFilterDto } from './dto/program-filter.dto';
 import { CreateProgramDto } from './dto/create-program.dto';
@@ -12,6 +17,7 @@ import { WeeklyPlanResponseDto } from '../plan/dto/weekly-plan-response.dto';
 export class ProgramsService {
   constructor(
     private readonly programsRepository: ProgramsRepository,
+    @Inject(forwardRef(() => PlanService))
     private readonly planService: PlanService,
   ) {}
 

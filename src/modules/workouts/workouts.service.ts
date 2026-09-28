@@ -1,8 +1,10 @@
 import {
+  Inject,
   Injectable,
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  forwardRef,
 } from '@nestjs/common';
 import { WorkoutsRepository } from './repositories/workouts.repository';
 import { ProgramsRepository } from '../programs/repositories/programs.repository';
@@ -20,6 +22,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 export class WorkoutsService {
   constructor(
     private readonly workoutsRepository: WorkoutsRepository,
+    @Inject(forwardRef(() => ProgramsRepository))
     private readonly programsRepository: ProgramsRepository,
     private readonly recommendationService: RecommendationService,
     private readonly prisma: PrismaService,
@@ -38,7 +41,9 @@ export class WorkoutsService {
       return WorkoutDetailResponseDto.fromEntityWithExercises(workout);
     }
 
-    const existingExerciseIdsInWorkout = new Set(workout.exercises.map((e) => e.id));
+    const existingExerciseIdsInWorkout = new Set(
+      workout.exercises.map((e) => e.id),
+    );
     const resolvedExercises: ExerciseResponseDto[] = [];
     for (const ex of workout.exercises) {
       const excludedIds = Array.from(existingExerciseIdsInWorkout).filter(
@@ -49,12 +54,11 @@ export class WorkoutsService {
           excludedIds.push(r.id);
         }
       }
-      const resolved =
-        await this.recommendationService.resolveExerciseForUser(
-          ex.id,
-          userId,
-          excludedIds,
-        );
+      const resolved = await this.recommendationService.resolveExerciseForUser(
+        ex.id,
+        userId,
+        excludedIds,
+      );
       resolvedExercises.push(
         ExerciseResponseDto.fromResolved(resolved, workout.id),
       );
@@ -221,9 +225,8 @@ export class WorkoutsService {
   }
 
   async getCustomWorkouts(userId: string): Promise<WorkoutDetailResponseDto[]> {
-    const workouts = await this.workoutsRepository.findByOwnerUserIdWithExercises(
-      userId,
-    );
+    const workouts =
+      await this.workoutsRepository.findByOwnerUserIdWithExercises(userId);
 
     const results: WorkoutDetailResponseDto[] = [];
     for (const workout of workouts) {
@@ -331,7 +334,10 @@ export class WorkoutsService {
         };
       });
 
-      const durationMinutes = Math.max(5, Math.round(totalEstimatedSeconds / 60));
+      const durationMinutes = Math.max(
+        5,
+        Math.round(totalEstimatedSeconds / 60),
+      );
       const kcalEstimate = Math.round(durationMinutes * 7.5);
 
       await this.prisma.$transaction([

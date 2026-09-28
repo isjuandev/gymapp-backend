@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { WorkoutsController } from './workouts.controller';
 import { ExercisesController } from './exercises.controller';
 import { WorkoutsService } from './workouts.service';
@@ -10,7 +10,9 @@ import { ProgramsModule } from '../programs/programs.module';
 import { RecommendationModule } from '../recommendation/recommendation.module';
 
 @Module({
-  imports: [AuthModule, ProgramsModule, RecommendationModule],
+  // forwardRef: ProgramsModule -> PlanModule -> WorkoutsModule closes a loop
+  // back to ProgramsModule; resolve it lazily (enroll = plan assignment).
+  imports: [AuthModule, forwardRef(() => ProgramsModule), RecommendationModule],
   controllers: [WorkoutsController, ExercisesController],
   providers: [
     WorkoutsService,
