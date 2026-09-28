@@ -1,14 +1,17 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
+  IsDateString,
   IsEnum,
   IsInt,
   IsNotEmpty,
+  IsNumber,
+  IsOptional,
   IsUUID,
   Max,
   Min,
 } from 'class-validator';
-import { ExperienceLevel, GoalType } from '@prisma/client';
+import { ExperienceLevel, Gender, GoalType } from '@prisma/client';
 
 export class CompleteOnboardingDto {
   @ApiProperty({
@@ -58,40 +61,51 @@ export class CompleteOnboardingDto {
   })
   equipmentIds: string[];
 
-  @ApiProperty({
-    enum: ['MALE', 'FEMALE', 'OTHER'],
-    required: false,
-    example: 'MALE',
+  @ApiPropertyOptional({
+    enum: Gender,
+    example: Gender.MALE,
     description: 'Biological gender for nutritional/BMR calculations',
   })
-  gender?: any;
+  @IsOptional()
+  @IsEnum(Gender, { message: 'gender must be one of: MALE, FEMALE, OTHER' })
+  gender?: Gender;
 
-  @ApiProperty({
-    required: false,
+  @ApiPropertyOptional({
     example: '1995-05-15T00:00:00.000Z',
     description: 'Birth date in ISO format',
   })
+  @IsOptional()
+  @IsDateString({}, { message: 'birthDate must be a valid ISO date string' })
   birthDate?: string;
 
-  @ApiProperty({
-    required: false,
+  @ApiPropertyOptional({
     example: 178.0,
-    description: 'Height in cm',
+    description: 'Height in cm (100 - 250)',
   })
+  @IsOptional()
+  @IsNumber({}, { message: 'heightCm must be a number' })
+  @Min(100, { message: 'heightCm must be at least 100' })
+  @Max(250, { message: 'heightCm cannot exceed 250' })
   heightCm?: number;
 
-  @ApiProperty({
-    required: false,
+  @ApiPropertyOptional({
     example: 82.5,
-    description: 'Current body weight in kg',
+    description: 'Current body weight in kg (30 - 300)',
   })
+  @IsOptional()
+  @IsNumber({}, { message: 'currentWeightKg must be a number' })
+  @Min(30, { message: 'currentWeightKg must be at least 30' })
+  @Max(300, { message: 'currentWeightKg cannot exceed 300' })
   currentWeightKg?: number;
 
-  @ApiProperty({
-    required: false,
+  @ApiPropertyOptional({
     example: 75.0,
-    description: 'Target body weight in kg',
+    description: 'Target body weight in kg (30 - 300)',
   })
+  @IsOptional()
+  @IsNumber({}, { message: 'targetWeightKg must be a number' })
+  @Min(30, { message: 'targetWeightKg must be at least 30' })
+  @Max(300, { message: 'targetWeightKg cannot exceed 300' })
   targetWeightKg?: number;
 }
 
